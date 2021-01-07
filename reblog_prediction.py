@@ -8,7 +8,7 @@ from sklearn import neural_network
 from sklearn import model_selection
 from sklearn import preprocessing
 from sklearn import svm
-from sklearn.feature_selection import SelectKBest, chi2, mutual_info_classif
+from sklearn.feature_selection import SelectKBest, chi2, mutual_info_classif, f_classif, VarianceThreshold
 import numpy as np
 from statsmodels.stats.contingency_tables import mcnemar
 from tqdm import tqdm
@@ -465,7 +465,7 @@ def get_informative_features(features_vectorizer, model, model_name, output_dirp
     print(f"\nSaved informative features to {outpath}")
 
 
-def extract_features(feature_sets, instances, instance_labels, identity_categories, test_instances=None, test_instance_labels=None, remove_zeros=False, initialization=None, test_initialization=None, categories=['all'], model_name=None, output_dirpath=None, save=False, extras=[], force=False):
+def extract_features(feature_sets, instances, instance_labels, identity_categories, test_instances=None, test_instance_labels=None, remove_zeros=False, initialization=None, test_initialization=None, categories=['all'], model_name=None, output_dirpath=None, save=False, extras=[], feature_selection_k=-1, force=False):
     """
         Main feature extraction function that selects utility feature extractors.
 
@@ -561,6 +561,19 @@ def extract_features(feature_sets, instances, instance_labels, identity_categori
     X_train = features_scaler.fit_transform(X_train)
     X_test = features_vectorizer.transform(X_test)
     X_test = features_scaler.transform(X_test)
+
+    if feature_selection_k > -1:
+        # Remove constant features (probably 0s)
+        constant_filter = VarianceThreshold(threshold=0)
+        constant_filter.fit(X_train)
+        X_train = constant_filter.transform(X_train)
+        X_test = constant_filter.transform(X_test)
+
+        # Feature selection
+        selector = SelectKBest(f_classif, k=feature_selection_k).fit(X_train, y_train)
+        X_train = selector.transform(X_train)
+        X_test = selector.transform(X_test)
+        
 
     # Save feature vectorizer for error analysis
     if output_dirpath and model_name:
@@ -707,6 +720,8 @@ def main():
             extras=[tag_vocab], 
             model_name=model_name,
             output_dirpath=output_dirpath,
+            feature_selection_k=args.feature_selection_k,
+            force=True,
             save=True)
 
     if test_instances:
@@ -726,13 +741,6 @@ def main():
         else:
             model_name = f'{args.model_name}_{args.classifier_type}'
 
-        if args.feature_selection_k > -1:
-            print("\tRunning feature selection...")
-            # Feature selection
-            selector = SelectKBest(mutual_info_classif, k=args.feature_selection_k).fit(X_train, y_train)
-            X_train = selector.transform(X_train)
-            X_test = selector.transform(X_test)
-        
         tqdm.write(f"\tTraining set #features: {X_train.shape[1]}, #instances: {X_train.shape[0]}")
         print("\tTraining model...")
         model, score, baseline_preds = run_model(model_name, clf, X_train, y_train, X_test, y_test, output_dirpath)
@@ -798,17 +806,10 @@ def main():
                 test_initialization=copy.deepcopy(baseline_X_test),
                 model_name=model_name,
                 output_dirpath=output_dirpath,
+                feature_selection_k=args.feature_selection_k,
                 save=True,
-                force=False,
+                force=True,
                 extras=[tag_vocab, category_vocabs])
-
-            # Feature selection
-            if args.feature_selection_k > -1:
-                tqdm.write("\tRunning feature selection...")
-                # Feature selection
-                selector = SelectKBest(mutual_info_classif, k=args.feature_selection_k).fit(X_train, y_train)
-                X_train = selector.transform(X_train)
-                X_test = selector.transform(X_test)
 
             tqdm.write(f"Number of total instances: {X_train.shape[0] + X_test.shape[0]}")
             tqdm.write(f"\tTraining set #features: {X_train.shape[1]}, #instances: {X_train.shape[0]}")
