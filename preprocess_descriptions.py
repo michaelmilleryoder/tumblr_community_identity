@@ -138,6 +138,7 @@ def preprocess(desc_data, desc_colname):
     desc_data.loc[:, new_colname] = process_dates_column(desc_data[new_colname])
 
     # Remove empty parsed blogs
+    # TODO: double-check that this works since doesn't always seem to, and check for NaNs
     desc_data = desc_data[desc_data[new_colname].map(lambda x: len(x) > 0)]
 
     return desc_data
