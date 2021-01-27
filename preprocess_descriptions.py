@@ -100,20 +100,20 @@ def tokenize_lowercase(col):
     with Pool(15) as pool:
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            new_col = list(tqdm(pool.imap(tokenize_text, col.tolist())), total=len(col))
+            new_col = list(tqdm(pool.imap(tokenize_text, col.tolist()), total=len(col), ncols=70))
     return new_col
 
 def process_urls_column(col):
-    tqdm.write("Processing URLs...", end=' ')
+    tqdm.write("Processing URLs...")
     sys.stdout.flush()
-    new_col = list(map(process_urls, tqdm(col.tolist())))
+    new_col = list(map(process_urls, tqdm(col.tolist(), ncols=70)))
     tqdm.write("done\n")
     return new_col
 
 def process_dates_column(col):
-    tqdm.write("Processing dates...", end=' ')
+    tqdm.write("Processing dates...")
     sys.stdout.flush()
-    new_col = list(map(process_dates, tqdm(col.tolist())))
+    new_col = list(map(process_dates, tqdm(col.tolist(), ncols=70)))
     tqdm.write("done\n")
     return new_col
 
@@ -138,7 +138,6 @@ def preprocess(desc_data, desc_colname):
     desc_data.loc[:, new_colname] = process_dates_column(desc_data[new_colname])
 
     # Remove empty parsed blogs
-    # TODO: double-check that this works since doesn't always seem to, and check for NaNs
     desc_data = desc_data[desc_data[new_colname].map(lambda x: len(x) > 0)]
 
     return desc_data
@@ -252,23 +251,29 @@ def save(desc_data, desc_fpath):
     tqdm.write(f"Saving parsed blog descriptions to {desc_fpath}...")
     sys.stdout.flush()
     #desc_data.to_pickle(desc_fpath)
-    desc_data.to_csv(desc_fpath, sep='\t', index=False)
+    desc_data.to_csv(desc_fpath, index=False)
 
 
 def main():
 
     # File input I/O
-    desc_fpath = '/data/tumblr_community_identity/dataset114k/matched_reblogs_nonreblogs_dataset114k.csv'
+    #desc_fpath = '/data/tumblr_community_identity/dataset114k/matched_reblogs_nonreblogs_dataset114k.csv'
+    #desc_fpath = '/data/tumblr_community_identity/fandom_blog_descriptions.csv'
+    desc_fpath = '/data/tumblr_community_identity/fandom_blog_descriptions.tsv'
     #out_fpath = desc_fpath[:-4] + '_processed.csv'
     out_fpath = desc_fpath
-    desc_colnames = [ # Will become processed_<colname>
-         'tumblr_blog_description_follower_reblog',
-         'tumblr_blog_description_followee_reblog',
-         'tumblr_blog_description_followee_nonreblog'
+    #desc_colnames = [ # Will become processed_<colname>
+    #     'tumblr_blog_description_follower_reblog',
+    #     'tumblr_blog_description_followee_reblog',
+    #     'tumblr_blog_description_followee_nonreblog'
+    #]
+    desc_colnames = [
+        'tumblr_blog_description'
     ]
 
     # Load data
-    descs = load_data(desc_fpath)
+    #descs = load_data(desc_fpath, sep=',')
+    descs = load_data(desc_fpath, sep='\t')
     for desc_colname in desc_colnames:
         descs = preprocess(descs, desc_colname)
 
