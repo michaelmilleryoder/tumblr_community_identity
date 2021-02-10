@@ -7,6 +7,7 @@ Load and filter data for reblog prediction experiments.
 import os
 import pdb
 
+import numpy as np
 import pandas as pd
 
 
@@ -22,7 +23,7 @@ class Dataset():
         self.X_test = None
         self.y_train = None
         self.y_test = None
-        self.organization = None 
+        self.organization = None
             # how the data is organized: {learning-to-rank, binary_classification}
         self.filter_settings = None
 
@@ -46,13 +47,40 @@ class Dataset():
         data = pd.read_csv(self.data_location)
         self.organization = organization
         if self.organization == 'learning-to-rank':
-            self.data = data
+            selected_cols = [
+                'post_tags_reblog_str',
+                'post_tags_nonreblog_str',
+                'post_note_count_reblog',
+                'post_note_count_nonreblog',
+                'post_type_reblog',
+                'post_type_nonreblog',
+                'tumblog_id_follower_reblog',
+                'tumblog_id_followee_reblog',
+                'tumblog_id_followee_nonreblog',
+                'processed_tumblr_blog_description_follower_reblog',
+                'processed_tumblr_blog_description_followee_reblog',
+                'processed_tumblr_blog_description_followee_nonreblog',
+            ]
+            rename_cols = {
+                'post_tags_reblog_str': 'post_tags_reblog',
+                'post_tags_nonreblog_str': 'post_tags_nonreblog',
+                'tumblog_id_follower_reblog': 'tumblog_id_follower',
+                'processed_tumblr_blog_description_follower_reblog':
+                    'processed_blog_description_follower',
+                'processed_tumblr_blog_description_followee_reblog':
+                    'processed_blog_description_followee_reblog',
+                'processed_tumblr_blog_description_followee_nonreblog':
+                    'processed_blog_description_followee_nonreblog'
+            }
+            self.data = data.loc[:, selected_cols]
+            self.data.rename(columns=rename_cols, inplace=True)
+            self.add_random_labels()
         elif self.organization == 'binary_classification':
             data_section = {}
             selected_cols = [
                 'post_tags_{}_str',
                 'post_note_count_{}',
-                'post_type_{}', 
+                'post_type_{}',
                 'tumblog_id_follower_reblog',
                 'tumblog_id_followee_{}',
                 'processed_tumblr_blog_description_follower_reblog',
@@ -63,10 +91,13 @@ class Dataset():
                 'post_note_count_{}': 'post_note_count',
                 'post_type_{}': 'post_type',
                 'tumblog_id_follower_reblog': 'tumblog_id_follower',
-                'processed_tumblr_blog_description_{}_reblog': 'processed_blog_description_follower',
+                'processed_tumblr_blog_description_{}_reblog':
+                    'processed_blog_description_follower',
                 'tumblog_id_followee_{}': 'tumblog_id_followee',
-                'processed_tumblr_blog_description_follower_reblog': 'processed_blog_description_follower',
-                'processed_tumblr_blog_description_followee_{}': 'processed_blog_description_followee',
+                'processed_tumblr_blog_description_follower_reblog':
+                    'processed_blog_description_follower',
+                'processed_tumblr_blog_description_followee_{}':
+                    'processed_blog_description_followee',
             }
             reblog_labels = {'reblog': True, 'nonreblog': False}
             for reblog_type in ['reblog', 'nonreblog']:
@@ -79,16 +110,25 @@ class Dataset():
                     reblog_labels[reblog_type]] * len(data_section[reblog_type])
             self.data = pd.concat([data_section[r] for r in ['reblog', 'nonreblog']])
 
-    def filter(self, user_ids=None, word_filter=None, word_filter_min=1, 
+    def add_random_labels(self):
+        """ Add random 0 and 1 labels for ordering reblog/nonreblogs
+            for learning-to-rank organization """
+        half_len = int(len(self.data)/2)
+        np.random.seed(9)
+        labels = [0]*half_len + [1]*half_len
+        np.random.shuffle(labels)
+        self.data['label'] = labels
+
+    def filter(self, user_ids=None, word_filter=None, word_filter_min=1,
                 preprocessed_descs=None):
         """ Filter self.data.
             Args:
                 user_ids: list of user tumblog IDs to filter data
                 word_filter: filter out rows with at least one blog description
                     that has no words in this word set
-                word_filter_min: minimum number of words needed in the word filter 
+                word_filter_min: minimum number of words needed in the word filter
                     list for a user's blog description
-                preprocessed_descs: dictionary of tumblog_id: token_list of 
+                preprocessed_descs: dictionary of tumblog_id: token_list of
                     preprocessed tokens
         """
         data = self.data
@@ -107,7 +147,8 @@ class Dataset():
         if word_filter:
             if self.organization == 'binary_classification':
                 for col in desc_cols:
-                    data = data[data[col].map(lambda x: sum(tok in word_filter for tok in x.split()) >= word_filter_min)]
+                    data = data[data[col].map(lambda x: sum(
+                        tok in word_filter for tok in x.split()) >= word_filter_min)]
 
         # Balance dataset between reblogs and nonreblogs
         if self.organization == 'binary_classification':

@@ -27,9 +27,9 @@ def get_args():
     parser = argparse.ArgumentParser(description='Extract features and run models')
     parser.add_argument('--classifier', dest='classifier_type', help='lr svm ffn', default='')
     parser.add_argument('--name', dest='model_name', help='model name base, automatically appends experiment features and classifier', default='')
-    parser.add_argument('--features', dest='features', help='Which set of features to include, separated by commas. Default: post,text', default='post,text')
-    parser.add_argument('--emb-type', dest='emb_type', help='Which pretrained word embedding model to use', default='post+desc')
-    parser.add_argument('--task', dest='task', help='Which task to run out of {binary_classification, learning-to-rank', default='learning-to-rank')
+    parser.add_argument('--features', dest='features', help='Which set of features to include, separated by commas. Options: {post,text,graph}. Default: post,text', default='post,text')
+    parser.add_argument('--emb-type', dest='emb_type', help='Which pretrained word embedding model to use', default='blog_desc')
+    parser.add_argument('--task', dest='task', help='Which task to run out of {binary_classification, learning-to-rank}', default='learning-to-rank')
     parser.add_argument('--dataset-location', dest='data_location', help='Path to the CSV of the dataset; default /data/tumblr_community_identity/dataset114k/matched_reblogs_nonreblogs_dataset114k.csv', default='/data/tumblr_community_identity/dataset114k/matched_reblogs_nonreblogs_dataset114k.csv')
     parser.add_argument('--output-dirpath', dest='output_dirpath', help='output dirpath; default /projects/websci2020_tumblr_identity', default='/projects/websci2020_tumblr_identity')
     parser.add_argument('--word-filter', dest='word_filter_min', type=int, 
@@ -54,7 +54,12 @@ def main():
     # Load trained embedding models
     print("Loading embeddings...")
     emb_loader = EmbeddingLoader(args.emb_type)
-    emb_loader.load(word_embs=True)
+    graph_embs = None
+    if 'graph' in args.features:
+        emb_loader.load(word_embs=True, graph_embs=True)
+        graph_embs = emb_loader.graph_embs
+    else:
+        emb_loader.load(word_embs=True)
     word_embs = emb_loader.word_embs
 
     # Load and filter dataset
@@ -70,7 +75,7 @@ def main():
 
     # Extract features
     print("Extracting features...")
-    extractor = FeatureExtractor(args.features, word_embs=word_embs)
+    extractor = FeatureExtractor(args.features, word_embs=word_embs, graph_embs=graph_embs)
     dataset = extractor.extract(dataset)
 
     # Run model
