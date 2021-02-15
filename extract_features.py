@@ -70,7 +70,7 @@ class FeatureExtractor():
         data = dataset.data
 
         # Baseline features
-        features = np.empty((len(data), 1))
+        features = None
         if self.post_features:
             # Post hashtag features
             post_features = self.extract_post_features(data, dataset.organization)
@@ -79,7 +79,10 @@ class FeatureExtractor():
         # Build user embeddings
         if self.user_features:
             user_features = self.extract_user_features(data, dataset.organization)
-            features = np.hstack([features, user_features])
+            if features is None:
+                features = user_features
+            else:
+                features = np.hstack([features, user_features])
 
         # Labels to predict
         if dataset.organization == 'learning-to-rank':
