@@ -38,11 +38,14 @@ def rank_feature_transform(reblog_feats_list, nonreblog_feats_list, labels):
 class FeatureExtractor():
     """ Extract features """
 
-    def __init__(self, feature_str, word_embs=None, graph_embs=None):
+    def __init__(self, feature_str, word_embs=None, graph_embs=None, sent_embs=None):
         """ Args:
                 features: comma-separated list of feature sets to be included
                 word_embs: loaded word vectors
                 graph_embs: loaded graph embeddings for users
+                sent_embs: loaded sentence embeddings for user blog descriptions.
+                    If this is not None, then will load blog description text
+                    embeddings from this instead of word_embs
         """
         features = feature_str.split(',')
         self.post_features, self.user_features = False, False
@@ -57,6 +60,7 @@ class FeatureExtractor():
             self.graph_features = True
         self.word_embs = word_embs
         self.graph_embs = graph_embs
+        self.sent_embs = sent_embs
 
     def extract(self, dataset):
         """ Takes a Dataset and extracts features.
@@ -173,8 +177,12 @@ class FeatureExtractor():
         parts = {} # to assemble in the end
         for user_type in ['follower', 'followee_reblog', 'followee_nonreblog']:
             tqdm.write(f'\t{user_type} text embeddings')
-            parts[user_type] = np.array([self.word_embeddings(desc) for desc in tqdm(
-                    data[f'processed_blog_description_{user_type}'], ncols=70)])
+            if self.sent_embs is not None:
+                parts[user_type] = np.array([self.sent_embeddings(uid) for uid in \
+                    tqdm(data[f'tumblog_id_{user_type}'], ncols=70)])
+            else:
+                parts[user_type] = np.array([self.word_embeddings(desc) for desc in \
+                    tqdm(data[f'processed_blog_description_{user_type}'], ncols=70)])
         for reblog_type in ['reblog', 'nonreblog']:
             parts[reblog_type] = np.hstack([
                 parts['follower'],
@@ -279,6 +287,16 @@ class FeatureExtractor():
             else:
                 user_embeddings = np.hstack([user_embeddings, graph_embeddings])
         return user_embeddings
+
+    def sent_embeddings(self, tumblog_id):
+        """ Looks up loaded blog description embedding for a given tumblog_id
+        """
+        if tumblog_id in self.sent_embs:
+            return_arr = self.sent_embs[tumblog_id]
+        else:
+            ndims = len(self.sent_embs[list(self.sent_embs.keys())[0]])
+            return_arr = np.zeros(ndims)
+        return return_arr
 
     def word_embeddings(self, text):
         """ Returns an embedding for a given text, which has
