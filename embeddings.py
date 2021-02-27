@@ -26,7 +26,7 @@ class EmbeddingLoader():
             'deepwalk': os.path.join(base_dirpath,
                 'websci_exp_20210107/model/post+deepwalk_sg_w2v.model'),
             'sent_embs': os.path.join(base_dirpath,
-                'new_sentence_embed/blog_embed.pkl')
+                'new_sentence_embed/blog_all_embed.pkl')
         }
 
     def load(self, word_embs=False, graph_embs=False, sent_embs=False):
