@@ -85,7 +85,8 @@ def main():
     if args.load_preprocessed:
         id2token = load_pickle(args.load_preprocessed)
         user_filter = set(list(id2token.keys()))
-        dataset.filter(user_ids=user_filter, word_filter=word_embs.wv, word_filter_min=args.word_filter_min, preprocessed_descs=id2token)
+        dataset.filter(user_ids=user_filter, word_filter=word_embs.wv, 
+            word_filter_min=args.word_filter_min, preprocessed_descs=id2token)
     else:
         dataset.filter(word_filter=word_embs.wv, word_filter_min=args.word_filter_min)
 
