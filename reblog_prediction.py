@@ -1,7 +1,9 @@
 """
 This script contains code for experiments predicting Tumblr reblog behavior
     (content propagation) from post content and identity features of users.
-It can treat this as simply binary classification of a reblog between (follower, followee) or learning-to-rank where a follower chooses to reblog a post from one of its followers and not from another
+It can treat this as simply binary classification of a reblog between 
+    (follower, followee) or learning-to-rank, where a follower chooses to 
+    reblog a post from one of its followers and not from another.
 
 Entrance point: main function.
 Environment: conda_env, included in this directory
@@ -25,7 +27,9 @@ from utils import load_pickle
 def get_args():
     """ Get CLI arguments """
     parser = argparse.ArgumentParser(description='Extract features and run models')
-    parser.add_argument('--classifier', dest='classifier_type', help='lr svm ffn', default='')
+    parser.add_argument('--classifier', dest='classifier_type', 
+        help='lr svm ffn cnn',
+        default='')
     parser.add_argument('--name', dest='model_name', help='model name base, automatically appends experiment features and classifier', default='')
     parser.add_argument('--features', dest='features', help='Which set of features to include, separated by commas. Options: {post,text,graph}. Default: post,text', default='post,text')
     parser.add_argument('--post-emb-type', dest='post_emb_type', 
@@ -52,6 +56,10 @@ def get_args():
 def main():
     """ Load data, train and evaluate a model """
     args = get_args()
+    if args.classifier_type in ['cnn']: # PyTorch
+        run_pkg = 'pytorch'
+    else:
+        run_pkg = 'sklearn'
     exp_name = '_'.join([
             args.model_name,
             args.features.replace(',', '+'),
@@ -92,21 +100,28 @@ def main():
 
     # Extract features
     print("Extracting features...")
-    extractor = FeatureExtractor(args.features, word_embs=word_embs,
-        graph_embs=graph_embs, sent_embs=sent_embs)
-    dataset = extractor.extract(dataset)
+    if run_pkg == 'pytorch':
+        extractor = FeatureExtractor(args.features, word_embs=word_embs,
+            graph_embs=graph_embs, sent_embs=sent_embs, 
+            word_inds=True, padding_size=30)
+        dataset = extractor.extract(dataset, dev=True)
+    else:
+        extractor = FeatureExtractor(args.features, word_embs=word_embs,
+            graph_embs=graph_embs, sent_embs=sent_embs)
+        dataset = extractor.extract(dataset)
 
     # Run model
     print("Running model...")
-    experiment = Experiment(dataset, args.classifier_type)
+    experiment = Experiment(extractor, dataset, args.classifier_type)
     experiment.run()
 
     # Print output
     print(f'\tScore: {experiment.score: .4f}')
 
     # Save settings, output
-    dataset.save_settings(exp_output_dirpath)
-    experiment.save_output(exp_output_dirpath)
+    if run_pkg == 'sklearn':
+        dataset.save_settings(exp_output_dirpath)
+        experiment.save_output(exp_output_dirpath)
 
 
 if __name__ == '__main__':

@@ -22,23 +22,38 @@ from tqdm import tqdm
 import utils
 
 
-def rank_feature_transform(reblog_feats_list, nonreblog_feats_list, labels):
+def rank_feature_transform(reblog_feats_list, nonreblog_feats_list, labels, 
+        combo='subtract'):
     """ Transform features to come up with comparison features for
-        learning-to-rank formulation """
+        learning-to-rank formulation.
+        Args:
+            combo: How to combine features. Options {subract, concat}
+    """
     comparison_feats = []
     for reblog_feats, nonreblog_feats, label in zip(
         reblog_feats_list, nonreblog_feats_list, labels):
+        #if reblog_feats.ndim == 0 or nonreblog_feats.ndim == 0:
+        #    pdb.set_trace()
         if label == 0:
-            comparison_feats.append(reblog_feats - nonreblog_feats)
+            if combo == 'subtract':
+                comparison_feats.append(reblog_feats - nonreblog_feats)
+            elif combo == 'concat':
+                comparison_feats.append(np.hstack([
+                    reblog_feats, nonreblog_feats]))
         else:
-            comparison_feats.append(nonreblog_feats - reblog_feats)
+            if combo == 'subtract':
+                comparison_feats.append(nonreblog_feats - reblog_feats)
+            elif combo == 'concat':
+                comparison_feats.append(np.hstack([
+                    nonreblog_feats, reblog_feats]))
     return np.array(comparison_feats)
 
 
 class FeatureExtractor():
     """ Extract features """
 
-    def __init__(self, feature_str, word_embs=None, graph_embs=None, sent_embs=None):
+    def __init__(self, feature_str, word_embs=None, graph_embs=None, sent_embs=None,
+            word_inds=False, padding_size=-1):
         """ Args:
                 features: comma-separated list of feature sets to be included
                 word_embs: loaded word vectors
@@ -46,6 +61,13 @@ class FeatureExtractor():
                 sent_embs: loaded sentence embeddings for user blog descriptions.
                     If this is not None, then will load blog description text
                     embeddings from this instead of word_embs
+                word_inds: True if output for text features should be returned as
+                    indices (for PyTorch) in the word_embs vocab + 1 to allow 0
+                    index for padding.
+                    If False, then will be converted to embeddings.
+                padding_size: Size of padding for variable-length text features,
+                    to be used when word_inds is True.
+                    If -1 (default), don't do padding.
         """
         features = feature_str.split(',')
         self.post_features, self.user_features = False, False
@@ -61,14 +83,21 @@ class FeatureExtractor():
         self.word_embs = word_embs
         self.graph_embs = graph_embs
         self.sent_embs = sent_embs
+        self.word_inds = word_inds
+        self.padding_size = padding_size
+        self.vocab = None
+        self.nontext_inds = None # nontext feature vector indices, for PyTorch
 
-    def extract(self, dataset):
+    def extract(self, dataset, dev=False):
         """ Takes a Dataset and extracts features.
             Returns a Dataset with extracted features in
                     dataset.X_train, dataset.y_train,
                     dataset.X_test, dataset.y_test
             Args:
                 data: Dataset
+                dev: Whether to split to include a dev set.
+                    If False, will just split into training
+                    and test.
         """
 
         data = dataset.data
@@ -97,10 +126,16 @@ class FeatureExtractor():
         # Split into train and test sets
         X_train, X_test, y_train, y_test = train_test_split(
             features, y, test_size=.1, random_state=9)
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
-        dataset.set_folds(X_train, X_test, y_train, y_test)
+        if dev: # PyTorch
+            X_train, X_dev, y_train, y_dev = train_test_split(
+                X_train, y_train, test_size=len(y_test), random_state=9)
+            dataset.set_folds(X_train, X_test, y_train, y_test,
+                X_dev=X_dev, y_dev=y_dev)
+        else: # sklearn
+            scaler = StandardScaler()
+            X_train = scaler.fit_transform(X_train)
+            X_test = scaler.transform(X_test)
+            dataset.set_folds(X_train, X_test, y_train, y_test)
         print("\tTotal dataset shape (#instances, #features):"
             f"{X_train.shape[0] + X_test.shape[0], X_train.shape[1]}")
         print(f"\tTraining set shape: {X_train.shape}")
@@ -118,12 +153,22 @@ class FeatureExtractor():
         if organization == 'learning-to-rank':
             # Post tags
             feature_opts = {} # reblog and nonreblog
+            if self.word_inds: # PyTorch
+                combo = 'concat'
+            else: # sklearn
+                combo = 'subtract'
             for reblog_type in ['reblog', 'nonreblog']:
-                feature_opts[reblog_type] = np.array([self.word_embeddings(
+                if self.word_inds: # for PyTorch
+                    fn = self.get_word_inds
+                    self.build_vocab()
+                else:
+                    fn = self.word_embeddings
+                feature_opts[reblog_type] = np.array([fn(
                         utils.string_list2str(tags)) for tags in tqdm(
                         data[f'post_tags_{reblog_type}'], ncols=70)])
             feature_parts['post_tags_emb'] = rank_feature_transform(
-                feature_opts['reblog'], feature_opts['nonreblog'], data.label)
+                feature_opts['reblog'], feature_opts['nonreblog'], data.label,
+                combo=combo)
 
             # Post notes
             feature_opts = {} # reblog and nonreblog
@@ -131,7 +176,8 @@ class FeatureExtractor():
                 feature_opts[reblog_type] = data[
                     f'post_note_count_{reblog_type}'].fillna(0).values
             feature_parts['post_note_count'] = rank_feature_transform(
-                feature_opts['reblog'], feature_opts['nonreblog'], data.label)
+                feature_opts['reblog'], feature_opts['nonreblog'], data.label, 
+                combo=combo)
 
             # Post type
             # Convert types to ints
@@ -140,13 +186,23 @@ class FeatureExtractor():
                 feature_opts[reblog_type] = pd.get_dummies(
                     data[f'post_type_{reblog_type}']).values
             feature_parts['post_type'] = rank_feature_transform(
-                feature_opts['reblog'], feature_opts['nonreblog'], data.label)
+                feature_opts['reblog'], feature_opts['nonreblog'], data.label,
+                combo=combo)
 
+            if not self.word_inds: # sklearn
+                feature_parts['post_note_count'] = feature_parts[
+                    'post_note_count'].reshape(-1,1)
             post_features = np.hstack([
                 feature_parts['post_tags_emb'],
-                feature_parts['post_note_count'].reshape(-1,1),
+                feature_parts['post_note_count'],
                 feature_parts['post_type']
             ])
+
+            # Pass on which indices of feature vectors aren't text (for PyTorch)
+            if self.word_inds:
+                self.nontext_inds = range(feature_parts[
+                    'post_tags_emb'].shape[1], post_features.shape[1])
+                post_features = post_features.astype(int)
 
         elif organization == 'binary_classification':
             # Post tags
@@ -181,14 +237,24 @@ class FeatureExtractor():
                 parts[user_type] = np.array([self.sent_embeddings(uid) for uid in \
                     tqdm(data[f'tumblog_id_{user_type}'], ncols=70)])
             else:
-                parts[user_type] = np.array([self.word_embeddings(desc) for desc in \
+                if self.word_inds:
+                    fn = self.get_word_inds
+                    if self.vocab is None:
+                        self.build_vocab()
+                else:
+                    fn = self.word_embeddings
+                parts[user_type] = np.array([fn(desc) for desc in \
                     tqdm(data[f'processed_blog_description_{user_type}'], ncols=70)])
         for reblog_type in ['reblog', 'nonreblog']:
             parts[reblog_type] = np.hstack([
                 parts['follower'],
                 parts[f'followee_{reblog_type}']])
+        if self.word_inds: # PyTorch
+            combo = 'concat'
+        else: # sklearn
+            combo = 'subtract'
         text_embeddings = rank_feature_transform(
-            parts['reblog'], parts['nonreblog'], data.label)
+            parts['reblog'], parts['nonreblog'], data.label, combo=combo)
         return text_embeddings
 
     def graph_embeddings_ltr(self, data):
@@ -311,3 +377,22 @@ class FeatureExtractor():
             if len(embeddings) > 0:
                 return_arr = np.mean(embeddings, axis=0)
         return return_arr
+
+    def get_word_inds(self, text):
+        """ Returns a list of word indices in the word_embs vocab + 1 (for padding).
+            Padded with 0s to self.padding_size.
+        """
+        if text is None or len(text) == 0:
+            return self.pad([])
+        return self.pad([(self.vocab[w]) for w in text.split() if w in self.vocab])
+
+    def pad(self, inds):
+        while len(inds) < self.padding_size:
+            inds.insert(len(inds), 0)
+        return inds[:self.padding_size]
+
+    def build_vocab(self):
+        """ Build vocab, save to self.vocab """
+        self.vocab = dict()
+        for w, vec in self.word_embs.wv.vocab.items():
+            self.vocab[w] = vec.index + 1 # add one for padding

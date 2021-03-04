@@ -27,11 +27,13 @@ class Dataset():
             # how the data is organized: {learning-to-rank, binary_classification}
         self.filter_settings = None
 
-    def set_folds(self, X_train, X_test, y_train, y_test):
+    def set_folds(self, X_train, X_test, y_train, y_test, X_dev=None, y_dev=None):
         """ Set training and testing folds """
         self.X_train = X_train
+        self.X_dev = X_dev
         self.X_test = X_test
         self.y_train = y_train
+        self.y_dev = y_dev
         self.y_test = y_test
 
     def load(self, data_location, organization):
