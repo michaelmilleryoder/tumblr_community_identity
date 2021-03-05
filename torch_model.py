@@ -19,13 +19,14 @@ from torch.utils.data import Dataset
 class TorchModel():
     """ Class to invoke one of possible torch models """
 
-    def __init__(self, clf_type: str, extractor, use_cuda: bool = False):
+    def __init__(self, clf_type: str, extractor, epochs, use_cuda: bool = False):
         """ Args:
                clf_type: classifier type
                extractor: FeatureExtractor, for the parameters
         """
         self.clf_type = clf_type
         self.extractor = extractor
+        self.epochs = epochs
         self.clfs = {
             'cnn': CNNTextClassifier
         }
@@ -35,9 +36,19 @@ class TorchModel():
         else:
             device = torch.device("cpu")
         self.clf = self.clfs[self.clf_type](extractor, device).to(device)
+        self.clf = MyDataParallel(self.clf)
 
 
-class CNNTextClassifier(nn.ModuleList):
+class MyDataParallel(nn.DataParallel):
+    """ Class to still be able to access attributes """
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.module, name)
+
+
+class CNNTextClassifier(nn.Module):
     """ From https://github.com/FernandoLpz/Text-Classification-CNN-PyTorch/blob/master/src/model/model.py """
 
     def __init__(self, extractor, device):
@@ -101,8 +112,10 @@ class CNNTextClassifier(nn.ModuleList):
     def in_features_fc(self):
         '''Calculates the number of output features after Convolution + Max pooling
 
-        Convolved_Features = ((embedding_size + (2 * padding) - dilation * (kernel - 1) - 1) / stride) + 1
-        Pooled_Features = ((embedding_size + (2 * padding) - dilation * (kernel - 1) - 1) / stride) + 1
+        Convolved_Features = ((embedding_size + (2 * padding) - dilation * 
+            (kernel - 1) - 1) / stride) + 1
+        Pooled_Features = ((embedding_size + (2 * padding) - dilation * 
+            (kernel - 1) - 1) / stride) + 1
 
         source: https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
         '''
@@ -234,8 +247,9 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
     model.train()
     predictions = []
     log_fpath = f'../log/{model.name}.csv'
-    with open(log_fpath, 'a') as f:
-        f.write('date,time,epoch,iteration,loss,train_accuracy,dev_accuracy\n')
+    if epoch + 1 == 1:
+        with open(log_fpath, 'w') as f:
+            f.write('datetime,epoch,iteration,loss,train_accuracy,dev_accuracy\n')
 
     # Starts batch training
     for i, (x_batch, y_batch) in enumerate(loader_train):
@@ -267,13 +281,13 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
         if i % 10 == 0:
             train_accuracy = calculate_accuracy(y_train, predictions)
             dev_accuracy = calculate_accuracy(y_dev, dev_predictions)
-            print("[%s] Epoch: %d, iter: %d, loss: %.3f, train acc: %.5f, " 
-                "dev acc: %.5f" % (datetime.datetime.now().strftime(
+            print("[%s] Epoch: %d, iter: %d, loss: %.3f, train acc: %.4f, " 
+                "dev acc: %.4f" % (datetime.datetime.now().strftime(
                 "%Y-%m-%d %H:%M"), epoch+1, i+1, loss.item(), train_accuracy, 
                 dev_accuracy))
             with open(log_fpath, 'a') as f:
-                f.write(','.join([datetime.datetime.now().strftime('%Y-%m-%d'),
-                    datetime.datetime.now().strftime('%H:%M'),
+                f.write(','.join([
+                    datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
                     str(epoch+1), str(i+1), str(loss.item()), str(train_accuracy), 
                     str(dev_accuracy)]) + '\n')
 

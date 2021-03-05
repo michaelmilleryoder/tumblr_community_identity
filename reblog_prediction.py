@@ -43,11 +43,19 @@ def get_args():
     parser.add_argument('--task', dest='task', 
         help='Which task to run out of {binary_classification, learning-to-rank}', 
         default='learning-to-rank')
-    parser.add_argument('--dataset-location', dest='data_location', help='Path to the CSV of the dataset; default /data/tumblr_community_identity/dataset114k/matched_reblogs_nonreblogs_dataset114k.csv', default='/data/tumblr_community_identity/dataset114k/matched_reblogs_nonreblogs_dataset114k.csv')
-    parser.add_argument('--output-dirpath', dest='output_dirpath', help='output dirpath; default /projects/websci2020_tumblr_identity', default='/projects/websci2020_tumblr_identity')
+    parser.add_argument('--dataset-location', dest='data_location', 
+        help='Path to the CSV of the dataset; default'
+             '/data/tumblr_community_identity/dataset114k/matched_reblogs_nonreblogs_dataset114k.csv',
+            default='/data/tumblr_community_identity/dataset114k/matched_reblogs_nonreblogs_dataset114k.csv')
+    parser.add_argument('--output-dirpath', dest='output_dirpath', 
+        help='output dirpath; default /projects/websci2020_tumblr_identity',
+        default='/projects/websci2020_tumblr_identity')
     parser.add_argument('--word-filter', dest='word_filter_min', type=int,
         help="word_filter_min: minimum number of words needed in the word"
             "filter list for a user's blog description; default 1", default=1)
+    parser.add_argument('--epochs', dest='epochs', type=int,
+        help="number of epochs to run pytorch model; default 1",
+        default=1)
     parser.add_argument('--preprocessed', dest='load_preprocessed', help='path to external preprocessed blog descriptions; default None', default=None)
     args = parser.parse_args()
     return args
@@ -112,7 +120,7 @@ def main():
 
     # Run model
     print("Running model...")
-    experiment = Experiment(extractor, dataset, args.classifier_type)
+    experiment = Experiment(extractor, dataset, args.classifier_type, args.epochs)
     experiment.run()
 
     # Print output
