@@ -24,7 +24,7 @@ from torch_model import TorchModel, DatasetMapper, train_epoch, test_model
 class Experiment():
     """ Encapsulates training and testing a model in an experiment. """
 
-    def __init__(self, extractor, data, classifier_type, epochs=1):
+    def __init__(self, extractor, data, classifier_type, use_cuda=False, epochs=1):
         """ Args:
                 extractor: FeatureExtractor, for the parameters
                 data: Dataset
@@ -33,6 +33,7 @@ class Experiment():
         self.data = data
         self.clf_type = classifier_type
         self.epochs = epochs
+        self.use_cuda = use_cuda
         self.model = None
         self.score = None
         self.train_pred = None
@@ -68,9 +69,8 @@ class Experiment():
 
     def run_pytorch(self):
         """ Train and evaluate models from pytorch """
-        use_cuda = True
         self.model = TorchModel(self.clf_type, self.extractor, epochs=self.epochs,
-             use_cuda=use_cuda)
+             use_cuda=self.use_cuda)
 
         #subset = 100 # for debugging
         #train = DatasetMapper(self.data.X_train[:subset], self.data.y_train[:subset])

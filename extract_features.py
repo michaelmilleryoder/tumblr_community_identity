@@ -87,6 +87,7 @@ class FeatureExtractor():
         self.padding_size = padding_size
         self.vocab = None
         self.nontext_inds = None # nontext feature vector indices, for PyTorch
+        self.reblog_inds = None # reblog feature vector indices, for PyTorch
 
     def extract(self, dataset, dev=False):
         """ Takes a Dataset and extracts features.
@@ -136,7 +137,7 @@ class FeatureExtractor():
             X_train = scaler.fit_transform(X_train)
             X_test = scaler.transform(X_test)
             dataset.set_folds(X_train, X_test, y_train, y_test)
-        print("\tTotal dataset shape (#instances, #features):"
+        print("\tTotal dataset shape (#instances, #features): "
             f"{X_train.shape[0] + X_test.shape[0], X_train.shape[1]}")
         print(f"\tTraining set shape: {X_train.shape}")
         print(f"\tTest set shape: {X_test.shape}")
@@ -198,10 +199,17 @@ class FeatureExtractor():
                 feature_parts['post_type']
             ])
 
-            # Pass on which indices of feature vectors aren't text (for PyTorch)
+            # Pass on which indices of feature vectors aren't text
+            # and which are reblog (for PyTorch)
             if self.word_inds:
                 self.nontext_inds = range(feature_parts[
                     'post_tags_emb'].shape[1], post_features.shape[1])
+                offset = 0
+                self.reblog_inds = []
+                for segment, feats in feature_parts.items():
+                    # Add in first half of segments (reblog/nonreblog concat)
+                    self.reblog_inds += range(offset, offset + int(feats.shape[1]/2))
+                    offset += feats.shape[1]
                 post_features = post_features.astype(int)
 
         elif organization == 'binary_classification':
@@ -246,9 +254,10 @@ class FeatureExtractor():
                 parts[user_type] = np.array([fn(desc) for desc in \
                     tqdm(data[f'processed_blog_description_{user_type}'], ncols=70)])
         for reblog_type in ['reblog', 'nonreblog']:
-            parts[reblog_type] = np.hstack([
-                parts['follower'],
-                parts[f'followee_{reblog_type}']])
+            #parts[reblog_type] = np.hstack([
+            #    parts['follower'],
+            #    parts[f'followee_{reblog_type}']])
+            parts[reblog_type] = parts['follower'] - parts[f'followee_{reblog_type}']
         if self.word_inds: # PyTorch
             combo = 'concat'
         else: # sklearn
@@ -273,9 +282,10 @@ class FeatureExtractor():
                         np.zeros(self.graph_embs.vector_size))
             parts[user_type] = np.array(parts[user_type])
         for reblog_type in ['reblog', 'nonreblog']:
-            parts[reblog_type] = np.hstack([
-                parts['follower'],
-                parts[f'followee_{reblog_type}']])
+            #parts[reblog_type] = np.hstack([
+            #    parts['follower'],
+            #    parts[f'followee_{reblog_type}']])
+            parts[reblog_type] = parts['follower'] - parts[f'followee_{reblog_type}']
         graph_embeddings = rank_feature_transform(
             parts['reblog'], parts['nonreblog'], data.label)
         return graph_embeddings
@@ -333,7 +343,7 @@ class FeatureExtractor():
         if organization == 'learning-to-rank':
             graph_embeddings = self.graph_embeddings_ltr(data)
         elif organization == 'binary_classification':
-            graph_embeddings = self.text_embeddings_bin(data)
+            graph_embeddings = self.graph_embeddings_bin(data)
         return graph_embeddings
 
     def extract_user_features(self, data, organization):
@@ -387,6 +397,7 @@ class FeatureExtractor():
         return self.pad([(self.vocab[w]) for w in text.split() if w in self.vocab])
 
     def pad(self, inds):
+        """ Pad input with 0s """
         while len(inds) < self.padding_size:
             inds.insert(len(inds), 0)
         return inds[:self.padding_size]

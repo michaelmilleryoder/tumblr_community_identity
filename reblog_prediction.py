@@ -9,7 +9,8 @@ Entrance point: main function.
 Environment: conda_env, included in this directory
 
 Example run:
-python reblog_prediction_binary.py --classifier lr --name baseline --feature user --output-dirpath output
+python reblog_prediction_binary.py --classifier lr --name baseline --feature user 
+    --output-dirpath output
 
 """
 
@@ -30,8 +31,10 @@ def get_args():
     parser.add_argument('--classifier', dest='classifier_type', 
         help='lr svm ffn cnn',
         default='')
-    parser.add_argument('--name', dest='model_name', help='model name base, automatically appends experiment features and classifier', default='')
-    parser.add_argument('--features', dest='features', help='Which set of features to include, separated by commas. Options: {post,text,graph}. Default: post,text', default='post,text')
+    parser.add_argument('--name', dest='model_name', 
+        help='model name base, automatically appends experiment features and classifier', default='')
+    parser.add_argument('--features', dest='features', 
+        help='Which set of features to include, separated by commas. Options: {post,text,graph}. Default: post,text', default='post,text')
     parser.add_argument('--post-emb-type', dest='post_emb_type', 
         help='Which pretrained word embedding model to use for posts'
                 'out of {posts, blog_desc, deepwalk}',
@@ -56,6 +59,8 @@ def get_args():
     parser.add_argument('--epochs', dest='epochs', type=int,
         help="number of epochs to run pytorch model; default 1",
         default=1)
+    parser.add_argument('--cuda', dest='use_cuda', action='store_true', default=False,
+        help='If using a PyTorch model, whether to use GPU')
     parser.add_argument('--preprocessed', dest='load_preprocessed', help='path to external preprocessed blog descriptions; default None', default=None)
     args = parser.parse_args()
     return args
@@ -120,7 +125,8 @@ def main():
 
     # Run model
     print("Running model...")
-    experiment = Experiment(extractor, dataset, args.classifier_type, args.epochs)
+    experiment = Experiment(extractor, dataset, args.classifier_type, args.use_cuda,
+         args.epochs)
     experiment.run()
 
     # Print output

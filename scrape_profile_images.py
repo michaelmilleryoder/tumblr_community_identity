@@ -30,15 +30,17 @@ def save_output(out_infopath, out_imagepath, num_attempted, count_successful, nu
 def main():
 
     # I/O
-    blognames_path = '/data/websci2020_tumblr_identity/icwsm2020_sample1k/blog_names.txt'
+    #blognames_path = '/data/websci2020_tumblr_identity/icwsm2020_sample1k/blog_names.txt'
     #blognames_path = '/data/icwsm2020_tumblr_identity/test_set_blog_names.txt'
+    blognames_path = '/data/tumblr_community_identity/dataset114k/blog_info_dataset114k.csv'
     #out_image_dirpath = '/data/icwsm2020_tumblr_identity/profile_images/test_set'
-    out_image_dirpath = '/data/websci2020_tumblr_identity/profile_images/icwsm2020_sample1k_nondefault'
+    #out_image_dirpath = '/data/websci2020_tumblr_identity/profile_images/icwsm2020_sample1k_nondefault'
+    out_image_dirpath = '/data/tumblr_community_identity/dataset114k/profile_images'
     if not os.path.exists(out_image_dirpath):
         os.mkdir(out_image_dirpath)
     out_image_subdir = os.path.join(out_image_dirpath, '{}')
     out_imagepath = os.path.join(out_image_subdir, '{}.png')
-    out_infopath = '/projects/websci2020_tumblr_identity/logs/scrape_info_{}.txt'
+    out_infopath = '/projects/tumblr_community_identity/pfp_log/scrape_profile_images_{}.txt'
 
     # Settings
     num_lines = None # numeric limit if want to, put None if not
@@ -46,7 +48,7 @@ def main():
     offset_successful = 0
 
     # OAuth
-    with open('../resources/oauth.txt') as f:
+    with open('/projects/tumblr_community_identity/resources/oauth.txt') as f:
         lines = f.read().splitlines()
         
     client = pytumblr.TumblrRestClient(lines[0], lines[1], lines[2], lines[3])

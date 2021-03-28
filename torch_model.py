@@ -35,8 +35,9 @@ class TorchModel():
             device = torch.device("cuda")
         else:
             device = torch.device("cpu")
-        self.clf = self.clfs[self.clf_type](extractor, device).to(device)
-        self.clf = MyDataParallel(self.clf)
+        self.clf = self.clfs[self.clf_type](extractor, device, self.epochs).to(device)
+        if self.use_cuda:
+            self.clf = MyDataParallel(self.clf)
 
 
 class MyDataParallel(nn.DataParallel):
@@ -49,14 +50,15 @@ class MyDataParallel(nn.DataParallel):
 
 
 class CNNTextClassifier(nn.Module):
-    """ From https://github.com/FernandoLpz/Text-Classification-CNN-PyTorch/blob/master/src/model/model.py """
+    """ From https://github.com/FernandoLpz/Text-Classification-CNN-PyTorch/
+        blob/master/src/model/model.py """
 
-    def __init__(self, extractor, device):
+    def __init__(self, extractor, device, epochs):
         """ Args:
                 extractor: FeatureExtractor, for the parameters
         """
 
-        super(CNNTextClassifier, self).__init__()
+        super().__init__()
         self.extractor = extractor
         self.device = device
         self.name = 'model' + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
@@ -83,10 +85,11 @@ class CNNTextClassifier(nn.Module):
         self.stride = 2
 
         # Training parameters
-        self.epochs = 6
-        self.batch_size = 12
+        self.epochs = epochs
+        self.batch_size = 128
         self.learning_rate = 0.001
 
+        """ ORIGINAL
         # Embedding layer definition
         weights = torch.FloatTensor(self.word_embs.wv.vectors).to(device)
         zeros = torch.zeros(1, self.embedding_size).to(device)
@@ -108,6 +111,17 @@ class CNNTextClassifier(nn.Module):
         
         # Fully connected layer definition
         self.fc = nn.Linear(self.in_features_fc(), 1)
+        """
+
+        # DEBUG
+        # Embedding layer definition
+        weights = torch.FloatTensor(self.word_embs.wv.vectors).to(device)
+        zeros = torch.zeros(1, self.embedding_size).to(device)
+        weights_with_padding = torch.cat((zeros, weights), 0).to(device)
+        self.embedding = nn.Embedding.from_pretrained(weights_with_padding,
+            padding_idx=0).to(device)
+
+        self.fc = nn.Linear(146, 1).to(device)
 
     def in_features_fc(self):
         '''Calculates the number of output features after Convolution + Max pooling
@@ -152,12 +166,13 @@ class CNNTextClassifier(nn.Module):
     def forward(self, x):
         """ Called indirectly through model(input)? """
 
+        """ ORIGINAL
         # Separate out text features for CNN and additional features
         x_text = x[:,np.array([i for i in range(x.shape[1]) if \
             i not in self.extractor.nontext_inds])]
         x_add = x[:,np.array(self.extractor.nontext_inds)]
 
-        # Sequence of tokes is filtered through an embedding layer
+        # Sequence of tokens is filtered through an embedding layer
         x = self.embedding(x_text)
         
         # Convolution layer 1 is applied
@@ -184,6 +199,24 @@ class CNNTextClassifier(nn.Module):
         union = torch.cat((x1, x2, x3, x4), 2) # add post notes and post type here
         union = union.reshape(union.size(0), -1)
         flattened = torch.cat((union, x_add), 1)
+        """
+
+        # DEBUG
+        x_reblog_text = x[:,np.array([i for i in range(x.shape[1]) if \
+            i not in self.extractor.nontext_inds and \
+            i in self.extractor.reblog_inds])]
+        x_nonreblog_text = x[:,np.array([i for i in range(x.shape[1]) if \
+            i not in self.extractor.nontext_inds and \
+            i not in self.extractor.reblog_inds])]
+        #x_text = x[:,np.array([i for i in range(x.shape[1]) if \
+        #    i not in self.extractor.nontext_inds])]
+        x_add = x[:,np.array(self.extractor.nontext_inds)]
+
+        x_reblog_text = self.embedding(x_reblog_text)
+        mean_reblog_text = torch.mean(x_reblog_text, 1, False)
+        x_nonreblog_text = self.embedding(x_nonreblog_text)
+        mean_nonreblog_text = torch.mean(x_nonreblog_text, 1, False)
+        flattened = torch.cat((mean_reblog_text, mean_nonreblog_text, x_add), 1)
     
         # The "flattened" vector is passed through a fully connected layer
         out = self.fc(flattened)
@@ -278,7 +311,7 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
         dev_predictions = evaluation(model, loader_dev)
 
         # Metrics calculation
-        if i % 10 == 0:
+        if (i+1) % 50 == 0:
             train_accuracy = calculate_accuracy(y_train, predictions)
             dev_accuracy = calculate_accuracy(y_dev, dev_predictions)
             print("[%s] Epoch: %d, iter: %d, loss: %.3f, train acc: %.4f, " 
