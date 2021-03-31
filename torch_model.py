@@ -29,6 +29,7 @@ class TorchModel():
         self.epochs = epochs
         self.clfs = {
             'cnn': CNNTextClassifier
+            'ffn': FFNTextClassifier
         }
         self.use_cuda = use_cuda
         if self.use_cuda:
@@ -61,16 +62,19 @@ class CNNTextClassifier(nn.Module):
         super().__init__()
         self.extractor = extractor
         self.device = device
+        self.clf_type = 'cnn'
         self.name = 'model' + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
 
         # Parameters regarding text preprocessing
         self.word_embs = self.extractor.word_embs
-        self.seq_len = self.extractor.padding_size * 6
+        #self.seq_len = self.extractor.padding_size * 6
+        self.seq_len = self.extractor.padding_size
         self.num_words = len(self.extractor.word_embs.wv.vocab)
         self.embedding_size = self.extractor.word_embs.vector_size
 
         # Dropout definition
-        self.dropout = nn.Dropout(0.25)
+        #self.dropout = nn.Dropout(0.25)
+        self.dropout = nn.Dropout(0)
 
         # CNN parameters definition
         # Kernel sizes
@@ -86,7 +90,7 @@ class CNNTextClassifier(nn.Module):
 
         # Training parameters
         self.epochs = epochs
-        self.batch_size = 128
+        self.batch_size = 32
         self.learning_rate = 0.001
 
         """ ORIGINAL
@@ -114,14 +118,130 @@ class CNNTextClassifier(nn.Module):
         """
 
         # DEBUG
-        # Embedding layer definition
+        ## Embedding layer definition
         weights = torch.FloatTensor(self.word_embs.wv.vectors).to(device)
         zeros = torch.zeros(1, self.embedding_size).to(device)
         weights_with_padding = torch.cat((zeros, weights), 0).to(device)
         self.embedding = nn.Embedding.from_pretrained(weights_with_padding,
             padding_idx=0).to(device)
 
-        self.fc = nn.Linear(146, 1).to(device)
+        ## Convolution layers definition
+        #self.conv_1 = nn.Conv1d(self.seq_len, self.out_size, self.kernel_1, self.stride)
+
+        ## Max pooling layers definition
+        #self.pool_1 = nn.MaxPool1d(self.kernel_1, self.stride)
+
+        #self.fc = nn.Linear(1042, 1).to(device)
+        #self.fc1 = nn.Linear(18, 18).to(device) # for non-text baseline
+        #self.fc2 = nn.Linear(18, 9).to(device)
+        #self.fc3 = nn.Linear(9, 1).to(device)
+        self.fc1 = nn.Linear(146, 146).to(device)
+        self.fc2 = nn.Linear(146, 64).to(device)
+        self.fc3 = nn.Linear(64, 32).to(device)
+        self.fc4 = nn.Linear(32, 1).to(device)
+
+        self.lossfunc = nn.BCEWithLogitsLoss()
+
+    def forward(self, x):
+        """ Called indirectly through model(input) """
+
+        """ ORIGINAL
+        # Separate out text features for CNN and additional features
+        x_text = x[:,np.array([i for i in range(x.shape[1]) if \
+            i not in self.extractor.nontext_inds])]
+        x_add = x[:,np.array(self.extractor.nontext_inds)]
+
+        # Sequence of tokens is filtered through an embedding layer
+        x = self.embedding(x_text)
+        
+        # Convolution layer 1 is applied
+        x1 = self.conv_1(x)
+        x1 = torch.relu(x1)
+        x1 = self.pool_1(x1)
+        
+        # Convolution layer 2 is applied
+        x2 = self.conv_2(x)
+        x2 = torch.relu((x2))
+        x2 = self.pool_2(x2)
+        
+        # Convolution layer 3 is applied
+        x3 = self.conv_3(x)
+        x3 = torch.relu(x3)
+        x3 = self.pool_3(x3)
+        
+        # Convolution layer 4 is applied
+        x4 = self.conv_4(x)
+        x4 = torch.relu(x4)
+        x4 = self.pool_4(x4)
+        
+        # The output of each convolutional layer is concatenated into a unique vector
+        union = torch.cat((x1, x2, x3, x4), 2)
+        union = union.reshape(union.size(0), -1)
+        flattened = torch.cat((union, x_add), 1) # add post notes and post type here
+        """
+
+        # DEBUG
+        x_reblog_text = x[:,np.array([i for i in range(x.shape[1]) if \
+            i not in self.extractor.nontext_inds and \
+            i in self.extractor.reblog_inds])]
+        x_nonreblog_text = x[:,np.array([i for i in range(x.shape[1]) if \
+            i not in self.extractor.nontext_inds and \
+            i not in self.extractor.reblog_inds])]
+        #x_text = x[:,np.array([i for i in range(x.shape[1]) if \
+        #    i not in self.extractor.nontext_inds])]
+        x_add = x[:,np.array(self.extractor.nontext_inds)].float()
+
+        x_reblog_text = self.embedding(x_reblog_text)
+        mean_reblog_text = torch.mean(x_reblog_text, 1, False)
+        x_nonreblog_text = self.embedding(x_nonreblog_text)
+        mean_nonreblog_text = torch.mean(x_nonreblog_text, 1, False)
+
+        ## Convolution layer 1 is applied
+        #x1_reblog = self.conv_1(x_reblog_text)
+        #x1_reblog = torch.relu(x1_reblog)
+        #x1_reblog = self.pool_1(x1_reblog)
+
+        #x1_nonreblog = self.conv_1(x_nonreblog_text)
+        #x1_nonreblog = torch.relu(x1_nonreblog)
+        #x1_nonreblog = self.pool_1(x1_nonreblog)
+
+        #union1 = torch.cat((x1_reblog, x1_nonreblog), 2)
+        #union1 = union1.reshape(union1.size(0), -1)
+        #flattened = torch.cat((union1, x_add), 1)
+        union1 = torch.cat((mean_reblog_text, mean_nonreblog_text), 1)
+        union1 = union1.reshape(union1.size(0), -1)
+        flattened = torch.cat((union1, x_add), 1)
+        #flattened = torch.FloatTensor(x_add.float())
+    
+        # The "flattened" vector is passed through a fully connected layer
+        out = self.fc1(flattened)
+        # Dropout is applied        
+        out = self.dropout(out)
+        # Activation function is applied
+        out = torch.sigmoid(out)
+
+        # The "flattened" vector is passed through a fully connected layer
+        out = self.fc2(out)
+        # Dropout is applied        
+        out = self.dropout(out)
+        # Activation function is applied
+        out = torch.sigmoid(out)
+        
+        # The "flattened" vector is passed through a fully connected layer
+        out = self.fc3(out)
+        # Dropout is applied        
+        out = self.dropout(out)
+        # Activation function is applied
+        out = torch.sigmoid(out)
+        
+        # The "flattened" vector is passed through a fully connected layer
+        out = self.fc4(out)
+        # Dropout is applied        
+        out = self.dropout(out)
+        # Activation function is applied
+        out = torch.sigmoid(out)
+        
+        return out.squeeze()
 
     def in_features_fc(self):
         '''Calculates the number of output features after Convolution + Max pooling
@@ -163,70 +283,115 @@ class CNNTextClassifier(nn.Module):
                 self.out_size + len(self.extractor.nontext_inds)
         return output_size
     
-    def forward(self, x):
-        """ Called indirectly through model(input)? """
+class FFNTextClassifier(nn.Module):
+    """ Feedforward NN classifier based on mean embeddings for 
+        post hashtags or blog descriptions """
 
-        """ ORIGINAL
-        # Separate out text features for CNN and additional features
-        x_text = x[:,np.array([i for i in range(x.shape[1]) if \
-            i not in self.extractor.nontext_inds])]
-        x_add = x[:,np.array(self.extractor.nontext_inds)]
-
-        # Sequence of tokens is filtered through an embedding layer
-        x = self.embedding(x_text)
-        
-        # Convolution layer 1 is applied
-        x1 = self.conv_1(x)
-        x1 = torch.relu(x1)
-        x1 = self.pool_1(x1)
-        
-        # Convolution layer 2 is applied
-        x2 = self.conv_2(x)
-        x2 = torch.relu((x2))
-        x2 = self.pool_2(x2)
-        
-        # Convolution layer 3 is applied
-        x3 = self.conv_3(x)
-        x3 = torch.relu(x3)
-        x3 = self.pool_3(x3)
-        
-        # Convolution layer 4 is applied
-        x4 = self.conv_4(x)
-        x4 = torch.relu(x4)
-        x4 = self.pool_4(x4)
-        
-        # The output of each convolutional layer is concatenated into a unique vector
-        union = torch.cat((x1, x2, x3, x4), 2) # add post notes and post type here
-        union = union.reshape(union.size(0), -1)
-        flattened = torch.cat((union, x_add), 1)
+    def __init__(self, extractor, device, epochs):
+        """ Args:
+                extractor: FeatureExtractor, for the parameters
         """
 
-        # DEBUG
+        super().__init__()
+        self.extractor = extractor
+        self.device = device
+        self.clf_type = 'ffn'
+        self.name = 'model' + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+
+        # Parameters regarding text preprocessing
+        self.word_embs = self.extractor.word_embs
+        self.seq_len = self.extractor.padding_size
+        self.num_words = len(self.extractor.word_embs.wv.vocab)
+        self.embedding_size = self.extractor.word_embs.vector_size
+
+        # Dropout definition
+        #self.dropout = nn.Dropout(0.25)
+        self.dropout = nn.Dropout(0)
+
+        # CNN parameters definition
+        # Kernel sizes
+        self.kernel_1 = 2
+        self.kernel_2 = 3
+        self.kernel_3 = 4
+        self.kernel_4 = 5
+
+        # Output size for each convolution
+        self.out_size = 32
+        # Number of strides for each convolution
+        self.stride = 2
+
+        # Training parameters
+        self.epochs = epochs
+        self.batch_size = 32
+        self.learning_rate = 0.001
+
+        ## Embedding layer definition
+        weights = torch.FloatTensor(self.word_embs.wv.vectors).to(device)
+        zeros = torch.zeros(1, self.embedding_size).to(device)
+        weights_with_padding = torch.cat((zeros, weights), 0).to(device)
+        self.embedding = nn.Embedding.from_pretrained(weights_with_padding,
+            padding_idx=0).to(device)
+
+        #self.fc = nn.Linear(1042, 1).to(device)
+        #self.fc1 = nn.Linear(18, 18).to(device) # for non-text baseline
+        #self.fc2 = nn.Linear(18, 9).to(device)
+        #self.fc3 = nn.Linear(9, 1).to(device)
+        self.fc1 = nn.Linear(146, 146).to(device)
+        self.fc2 = nn.Linear(146, 64).to(device)
+        self.fc3 = nn.Linear(64, 32).to(device)
+        self.fc4 = nn.Linear(32, 1).to(device)
+
+        self.lossfunc = nn.BCEWithLogitsLoss()
+
+    def forward(self, x):
+        """ Called indirectly through model(input) """
+
         x_reblog_text = x[:,np.array([i for i in range(x.shape[1]) if \
             i not in self.extractor.nontext_inds and \
             i in self.extractor.reblog_inds])]
         x_nonreblog_text = x[:,np.array([i for i in range(x.shape[1]) if \
             i not in self.extractor.nontext_inds and \
             i not in self.extractor.reblog_inds])]
-        #x_text = x[:,np.array([i for i in range(x.shape[1]) if \
-        #    i not in self.extractor.nontext_inds])]
-        x_add = x[:,np.array(self.extractor.nontext_inds)]
+        x_add = x[:,np.array(self.extractor.nontext_inds)].float()
 
         x_reblog_text = self.embedding(x_reblog_text)
         mean_reblog_text = torch.mean(x_reblog_text, 1, False)
         x_nonreblog_text = self.embedding(x_nonreblog_text)
         mean_nonreblog_text = torch.mean(x_nonreblog_text, 1, False)
-        flattened = torch.cat((mean_reblog_text, mean_nonreblog_text, x_add), 1)
+
+        union1 = torch.cat((mean_reblog_text, mean_nonreblog_text), 1)
+        union1 = union1.reshape(union1.size(0), -1)
+        flattened = torch.cat((union1, x_add), 1)
     
         # The "flattened" vector is passed through a fully connected layer
-        out = self.fc(flattened)
+        out = self.fc1(flattened)
+        # Dropout is applied        
+        out = self.dropout(out)
+        # Activation function is applied
+        out = torch.sigmoid(out)
+
+        # The "flattened" vector is passed through a fully connected layer
+        out = self.fc2(out)
+        # Dropout is applied        
+        out = self.dropout(out)
+        # Activation function is applied
+        out = torch.sigmoid(out)
+        
+        # The "flattened" vector is passed through a fully connected layer
+        out = self.fc3(out)
+        # Dropout is applied        
+        out = self.dropout(out)
+        # Activation function is applied
+        out = torch.sigmoid(out)
+        
+        # The "flattened" vector is passed through a fully connected layer
+        out = self.fc4(out)
         # Dropout is applied        
         out = self.dropout(out)
         # Activation function is applied
         out = torch.sigmoid(out)
         
         return out.squeeze()
-
 
 class DatasetMapper(Dataset):
     def __init__(self, x, y):
@@ -279,13 +444,18 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
     # Set model in training model
     model.train()
     predictions = []
-    log_fpath = f'../log/{model.name}.csv'
+    log_fpath = f'../log/{model.clf_type}{model.name}.csv'
     if epoch + 1 == 1:
+        print(f'Logging to {log_fpath}')
         with open(log_fpath, 'w') as f:
             f.write('datetime,epoch,iteration,loss,train_accuracy,dev_accuracy\n')
 
     # Starts batch training
     for i, (x_batch, y_batch) in enumerate(loader_train):
+
+        # Clean gradients
+        optimizer.zero_grad()
+        #model.train()
 
         y_batch = y_batch.type(torch.FloatTensor).to(model.device)
 
@@ -293,10 +463,8 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
         y_pred = model(x_batch.to(model.device))
 
         # Loss calculation
-        loss = F.binary_cross_entropy(y_pred, y_batch)
-
-        # Clean gradients
-        optimizer.zero_grad()
+        #loss = F.binary_cross_entropy(y_pred, y_batch)
+        loss = model.lossfunc(y_pred, y_batch)
 
         # Gradients calculation
         loss.backward()
@@ -305,14 +473,17 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
         optimizer.step()
 
         # Save predictions
-        predictions += list(y_pred.detach().cpu().numpy())
+        #predictions = list(y_pred.detach().cpu().numpy())
+        #predictions += evaluation(model, x_batch)
         
-        # Evaluation phase
-        dev_predictions = evaluation(model, loader_dev)
-
         # Metrics calculation
-        if (i+1) % 50 == 0:
-            train_accuracy = calculate_accuracy(y_train, predictions)
+        if (i+1) % 100 == 0 or i+1 == len(loader_train):
+
+            # Evaluation phase
+            dev_predictions = evaluation(model, loader_dev)
+            train_predictions = evaluation(model, loader_train)
+
+            train_accuracy = calculate_accuracy(y_train, train_predictions)
             dev_accuracy = calculate_accuracy(y_dev, dev_predictions)
             print("[%s] Epoch: %d, iter: %d, loss: %.3f, train acc: %.4f, " 
                 "dev acc: %.4f" % (datetime.datetime.now().strftime(

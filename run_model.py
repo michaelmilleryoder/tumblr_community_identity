@@ -42,7 +42,7 @@ class Experiment():
 
     def run(self):
         """ Train the model, evaluate on test set """
-        if self.clf_type in ['cnn']:
+        if self.clf_type in ['cnn', 'ffn']:
             self.run_pytorch()
         else:
             self.run_sklearn()
@@ -58,7 +58,7 @@ class Experiment():
                 max_iter=10000, verbose=0),
                 {'C': [.01, .1, 1, 10, 100],
                 'penalty': ['l2']}, n_jobs=10, cv=10, verbose=2),
-            'ffn': neural_network.MLPClassifier(hidden_layer_sizes=(32, 50),
+            'mlp': neural_network.MLPClassifier(hidden_layer_sizes=(32, 50),
                 activation='relu', early_stopping=True, verbose=2)
         }
         self.clf = classifier_options[self.clf_type]
@@ -72,16 +72,27 @@ class Experiment():
         self.model = TorchModel(self.clf_type, self.extractor, epochs=self.epochs,
              use_cuda=self.use_cuda)
 
-        #subset = 100 # for debugging
-        #train = DatasetMapper(self.data.X_train[:subset], self.data.y_train[:subset])
-        train = DatasetMapper(self.data.X_train, self.data.y_train)
+        debug = False
+        subset = 100 # for debugging
+        if debug:
+            train = DatasetMapper(self.data.X_train[:subset], 
+                self.data.y_train[:subset])
+        else:
+            train = DatasetMapper(self.data.X_train, self.data.y_train)
         dev = DatasetMapper(self.data.X_dev, self.data.y_dev)
         test = DatasetMapper(self.data.X_test, self.data.y_test)
 
         # Initialize loaders
-        loader_train = DataLoader(train, batch_size=self.model.clf.batch_size)
-        loader_dev = DataLoader(dev, batch_size=self.model.clf.batch_size)
-        loader_test = DataLoader(test, batch_size=self.model.clf.batch_size)
+        if self.use_cuda:
+            pin = True
+        else:
+            pin = False
+        loader_train = DataLoader(train, batch_size=self.model.clf.batch_size,
+            pin_memory=pin)
+        loader_dev = DataLoader(dev, batch_size=self.model.clf.batch_size,
+            pin_memory=pin)
+        loader_test = DataLoader(test, batch_size=self.model.clf.batch_size,
+            pin_memory=pin)
 
         # Define optimizer
         optimizer = optim.RMSprop(self.model.clf.parameters(),
@@ -89,8 +100,12 @@ class Experiment():
 
         # Starts training phase
         for epoch in range(self.model.epochs):
-            train_epoch(epoch, self.model.clf, loader_train, loader_dev, optimizer,
-                self.data.y_train, self.data.y_dev)
+            if debug:
+                train_epoch(epoch, self.model.clf, loader_train, loader_dev, 
+                    optimizer, self.data.y_train[:subset], self.data.y_dev)
+            else:
+                train_epoch(epoch, self.model.clf, loader_train, loader_dev, 
+                    optimizer, self.data.y_train, self.data.y_dev)
 
         # Test
         self.score = test_model(self.model.clf, loader_test, self.data.y_test)
