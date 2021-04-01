@@ -16,9 +16,12 @@ from sklearn import model_selection
 from sklearn import svm
 import torch
 import torch.optim as optim
+import torch.nn as nn
 from torch.utils.data import DataLoader
+import pickle
+import pdb
 
-from torch_model import TorchModel, DatasetMapper, train_epoch, test_model
+from torch_model import TorchModel, FFNTextClassifier, DatasetMapper, train_epoch, test_model
 
 
 class Experiment():
@@ -69,8 +72,13 @@ class Experiment():
 
     def run_pytorch(self):
         """ Train and evaluate models from pytorch """
-        self.model = TorchModel(self.clf_type, self.extractor, epochs=self.epochs,
-             use_cuda=self.use_cuda)
+        #self.model = TorchModel(self.clf_type, self.extractor, epochs=self.epochs,
+        #     use_cuda=self.use_cuda)
+
+        # Training parameters
+        batch_size = 32
+        learning_rate = 0.01
+        criterion = nn.BCEWithLogitsLoss()
 
         debug = False
         subset = 100 # for debugging
@@ -79,6 +87,13 @@ class Experiment():
                 self.data.y_train[:subset])
         else:
             train = DatasetMapper(self.data.X_train, self.data.y_train)
+            
+            # Save out for debugging
+            with open('/projects/tumblr_community_identity/tmp/X_train.pkl', 'wb') as f:
+                pickle.dump(self.data.X_train, f)
+            with open('/projects/tumblr_community_identity/tmp/y_train.pkl', 'wb') as f:
+                pickle.dump(self.data.y_train, f)
+
         dev = DatasetMapper(self.data.X_dev, self.data.y_dev)
         test = DatasetMapper(self.data.X_test, self.data.y_test)
 
@@ -87,28 +102,38 @@ class Experiment():
             pin = True
         else:
             pin = False
-        loader_train = DataLoader(train, batch_size=self.model.clf.batch_size,
+        loader_train = DataLoader(train, batch_size=batch_size,
             pin_memory=pin)
-        loader_dev = DataLoader(dev, batch_size=self.model.clf.batch_size,
+        loader_dev = DataLoader(dev, batch_size=batch_size,
             pin_memory=pin)
-        loader_test = DataLoader(test, batch_size=self.model.clf.batch_size,
+        loader_test = DataLoader(test, batch_size=batch_size,
             pin_memory=pin)
+
+        # Debugging--running the model right here
+        model = FFNTextClassifier(self.extractor, device = torch.device("cpu"))
 
         # Define optimizer
-        optimizer = optim.RMSprop(self.model.clf.parameters(),
-            lr=self.model.clf.learning_rate)
+        #optimizer = optim.RMSprop(self.model.clf.parameters(),
+        #    lr=learning_rate)
+        optimizer = optim.SGD(model.parameters(),
+            lr=learning_rate)
+        #optimizer = optim.Adam(self.model.clf.parameters(),
+        #    lr=learning_rate)
 
         # Starts training phase
-        for epoch in range(self.model.epochs):
+        for epoch in range(self.epochs):
             if debug:
-                train_epoch(epoch, self.model.clf, loader_train, loader_dev, 
-                    optimizer, self.data.y_train[:subset], self.data.y_dev)
+                train_epoch(epoch, model, loader_train, loader_dev, 
+                    optimizer, self.data.y_train[:subset], self.data.y_dev,
+                    criterion)
             else:
-                train_epoch(epoch, self.model.clf, loader_train, loader_dev, 
-                    optimizer, self.data.y_train, self.data.y_dev)
+                train_epoch(epoch, model, loader_train, loader_dev, 
+                    optimizer, self.data.y_train, self.data.y_dev,
+                    criterion)
 
         # Test
-        self.score = test_model(self.model.clf, loader_test, self.data.y_test)
+        #self.score = test_model(self.model.clf, loader_test, self.data.y_test)
+        self.score = test_model(model, loader_test, self.data.y_test)
 
         # Save model
         outpath = os.path.join('../models/', self.clf_type + self.model.clf.name \

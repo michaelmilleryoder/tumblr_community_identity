@@ -69,7 +69,7 @@ def get_args():
 def main():
     """ Load data, train and evaluate a model """
     args = get_args()
-    if args.classifier_type in ['cnn']: # PyTorch
+    if args.classifier_type in ['cnn', 'ffn']: # PyTorch
         run_pkg = 'pytorch'
     else:
         run_pkg = 'sklearn'
