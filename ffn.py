@@ -5,9 +5,11 @@ Feedforward network in PyTorch
 @date 2021
 """
 
+import datetime
+
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class FFNTextClassifier(nn.Module):
@@ -31,10 +33,6 @@ class FFNTextClassifier(nn.Module):
         self.num_words = len(self.extractor.word_embs.wv.vocab)
         self.embedding_size = self.extractor.word_embs.vector_size
 
-        # Dropout definition
-        #self.dropout = nn.Dropout(0.25)
-        #self.dropout = nn.Dropout(0)
-
         ## Embedding layer definition
         #weights = torch.FloatTensor(self.word_embs.wv.vectors).to(device)
         #zeros = torch.zeros(1, self.embedding_size).to(device) # embedding for 0 pad
@@ -43,9 +41,12 @@ class FFNTextClassifier(nn.Module):
         #    padding_idx=0).to(device)
 
         #self.fc = nn.Linear(1042, 1).to(device)
-        self.fc1 = nn.Linear(18, 18).to(device) # for non-text baseline
-        self.fc2 = nn.Linear(18, 9).to(device)
-        self.fc3 = nn.Linear(9, 1).to(device)
+        self.fc1 = nn.Linear(18, 6).to(device) # for non-text baseline
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(6, 1).to(device)
+        self.sigmoid = nn.Sigmoid()        
+
+        #self.fc3 = nn.Linear(9, 1).to(device)
         #self.fc1 = nn.Linear(146, 146).to(device)
         #self.fc2 = nn.Linear(146, 64).to(device)
         #self.fc3 = nn.Linear(64, 32).to(device)
@@ -60,7 +61,7 @@ class FFNTextClassifier(nn.Module):
         #x_nonreblog_text = x[:,np.array([i for i in range(x.shape[1]) if \
         #    i not in self.extractor.nontext_inds and \
         #    i not in self.extractor.reblog_inds])]
-        x_add = x[:,np.array(self.extractor.nontext_inds)].float()
+        #x_add = x[:,np.array(self.extractor.nontext_inds)].float()
 
         #x_reblog_text = self.embedding(x_reblog_text)
         #mean_reblog_text = torch.mean(x_reblog_text, 1, False)
@@ -70,28 +71,34 @@ class FFNTextClassifier(nn.Module):
         #union1 = torch.cat((mean_reblog_text, mean_nonreblog_text), 1)
         #union1 = union1.reshape(union1.size(0), -1)
         #flattened = torch.cat((union1, x_add), 1)
-        flattened = torch.FloatTensor(x_add.float())
+        #flattened = torch.FloatTensor(x_add.float())
+
+        hidden = self.fc1(torch.FloatTensor(x.float()))
+        relu = self.relu(hidden)
+        output = self.fc2(relu)
+        output = self.sigmoid(output)
+        return output.squeeze()
     
         # The "flattened" vector is passed through a fully connected layer
-        out = self.fc1(flattened)
+        #out = self.fc1(flattened)
         # Dropout is applied        
         #out = self.dropout(out)
         # Activation function is applied
-        out = torch.relu(out)
+        #out = torch.relu(out)
 
         # The "flattened" vector is passed through a fully connected layer
-        out = self.fc2(out)
+        #out = self.fc2(out)
         # Dropout is applied        
         #out = self.dropout(out)
         # Activation function is applied
-        out = torch.relu(out)
+        #out = torch.relu(out)
         
         # The "flattened" vector is passed through a fully connected layer
-        out = self.fc3(out)
+        #out = self.fc3(out)
         # Dropout is applied        
         #out = self.dropout(out)
         # Activation function is applied
-        out = torch.relu(out)
+        #out = torch.relu(out)
         
         # The "flattened" vector is passed through a fully connected layer
         #out = self.fc4(out)
@@ -100,5 +107,4 @@ class FFNTextClassifier(nn.Module):
         # Activation function is applied
         #out = torch.relu(out)
         
-        return out.squeeze()
-
+        #return out.squeeze()

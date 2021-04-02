@@ -103,19 +103,18 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
 
     # Set model in training model
     model.train()
-    #predictions = []
     log_fpath = f'../log/{model.clf_type}{model.name}.csv'
     if epoch + 1 == 1:
         print(f'Logging to {log_fpath}')
         with open(log_fpath, 'w') as f:
             f.write('datetime,epoch,iteration,loss,train_accuracy,dev_accuracy\n')
+    epochloss = 0
 
     # Starts batch training
     for i, (x_batch, y_batch) in enumerate(loader_train):
 
         # Clean gradients
         optimizer.zero_grad()
-        #model.train()
 
         y_batch = y_batch.type(torch.FloatTensor).to(model.device)
 
@@ -123,8 +122,8 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
         y_pred = model(x_batch.to(model.device))
 
         # Loss calculation
-        loss = F.binary_cross_entropy(y_pred.sigmoid(), y_batch)
-        #loss = criterion(y_pred, y_batch)
+        loss = criterion(y_pred, y_batch)
+        epochloss += loss.item() * x_batch.size(0) 
 
         # Gradients calculation
         loss.backward()
@@ -132,15 +131,12 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
         # Gradients update
         optimizer.step()
 
-        # Save predictions
-        #predictions = list(y_pred.detach().cpu().numpy())
-        #predictions += evaluation(model, x_batch)
-        
         # Metrics calculation
-        if (i+1) % 500 == 0 or i+1 == len(loader_train):
+        #if (i+1) % 500 == 0 or i+1 == len(loader_train):
+        if i+1 == len(loader_train):
             print("[%s] Epoch: %d, iter: %d, loss: %.3f" 
                 % (datetime.datetime.now().strftime(
-                "%Y-%m-%d %H:%M"), epoch+1, i+1, loss.item()))
+                "%Y-%m-%d %H:%M"), epoch+1, i+1, epochloss/len(y_train)))
             with open(log_fpath, 'a') as f:
                 f.write(','.join([
                     datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),

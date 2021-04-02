@@ -14,6 +14,7 @@ from sklearn import linear_model
 from sklearn import neural_network
 from sklearn import model_selection
 from sklearn import svm
+from sklearn.preprocessing import StandardScaler
 import torch
 import torch.optim as optim
 import torch.nn as nn
@@ -77,16 +78,33 @@ class Experiment():
 
         # Training parameters
         batch_size = 32
-        learning_rate = 0.01
-        criterion = nn.BCEWithLogitsLoss()
+        learning_rate = 0.001
+        criterion = nn.BCELoss()
 
         debug = False
         subset = 100 # for debugging
+
+        # Select features (should be a function)
+        X_train_add = self.data.X_train[:,np.array(self.extractor.nontext_inds)]
+        scaler = StandardScaler()
+        X_train_add_scaled = scaler.fit_transform(X_train_add)
+        X_train = X_train_add_scaled
+
+        X_dev_add = self.data.X_dev[:,np.array(self.extractor.nontext_inds)]
+        X_dev_add_scaled = scaler.transform(X_dev_add)
+        X_dev = X_dev_add_scaled
+
+        X_test_add = self.data.X_test[:,np.array(self.extractor.nontext_inds)]
+        X_test_add_scaled = scaler.transform(X_test_add)
+        X_test = X_test_add_scaled
+
+        dev = DatasetMapper(X_dev, self.data.y_dev)
+        test = DatasetMapper(X_test, self.data.y_test)
+
         if debug:
-            train = DatasetMapper(self.data.X_train[:subset], 
-                self.data.y_train[:subset])
+            train = DatasetMapper(X_train[:subset], self.data.y_train[:subset])
         else:
-            train = DatasetMapper(self.data.X_train, self.data.y_train)
+            train = DatasetMapper(X_train, self.data.y_train)
             
             # Save out for debugging
             with open('/projects/tumblr_community_identity/tmp/X_train.pkl', 'wb') as f:
@@ -94,14 +112,12 @@ class Experiment():
             with open('/projects/tumblr_community_identity/tmp/y_train.pkl', 'wb') as f:
                 pickle.dump(self.data.y_train, f)
 
-        dev = DatasetMapper(self.data.X_dev, self.data.y_dev)
-        test = DatasetMapper(self.data.X_test, self.data.y_test)
-
         # Initialize loaders
         if self.use_cuda:
             pin = True
         else:
             pin = False
+
         loader_train = DataLoader(train, batch_size=batch_size,
             pin_memory=pin)
         loader_dev = DataLoader(dev, batch_size=batch_size,
@@ -136,10 +152,10 @@ class Experiment():
         self.score = test_model(model, loader_test, self.data.y_test)
 
         # Save model
-        outpath = os.path.join('../models/', self.clf_type + self.model.clf.name \
-             + '.model')
-        torch.save(self.model.clf.state_dict(), outpath)
-        print(f"Model saved to {outpath}")
+        #outpath = os.path.join('../models/', self.clf_type + self.model.clf.name \
+        #     + '.model')
+        #torch.save(self.model.clf.state_dict(), outpath)
+        #print(f"Model saved to {outpath}")
 
     def save_output(self, output_dirpath):
         """ Save score and predictions """
