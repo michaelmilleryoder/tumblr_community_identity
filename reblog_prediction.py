@@ -34,7 +34,7 @@ def get_args():
     parser.add_argument('--name', dest='model_name', 
         help='model name base, automatically appends experiment features and classifier', default='')
     parser.add_argument('--features', dest='features', 
-        help='Which set of features to include, separated by commas. Options: {post,text,graph}. Default: post,text', default='post,text')
+        help='Which set of features to include, separated by commas. Options: {post,post_nontext,text,graph}. Default: post,text', default='post,text')
     parser.add_argument('--post-emb-type', dest='post_emb_type', 
         help='Which pretrained word embedding model to use for posts'
                 'out of {posts, blog_desc, deepwalk}',

@@ -9,19 +9,22 @@ import pdb
 
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import StandardScaler
 
 
 class Dataset():
     """ Encapsulates data and train/test splits,
-        as well as load and filter methods
+        as well as load, filter, and scaling methods
     """
 
     def __init__(self):
         self.data = None
         self.data_location = None
         self.X_train = None
+        self.X_dev = None
         self.X_test = None
         self.y_train = None
+        self.y_dev = None
         self.y_test = None
         self.organization = None
             # how the data is organized: {learning-to-rank, binary_classification}
@@ -176,3 +179,31 @@ class Dataset():
         output = pd.DataFrame(settings.values(), index=settings.keys())
         output.to_csv(os.path.join(output_dirpath, 'dataset_settings.csv'), header=False)
         print(f"\tSaved dataset settings to {output_dirpath}")
+
+    def scale_nontext_features(self, nontext_inds):
+        """ Scale nontext features, for PyTorch prep """
+
+        X_train_add = self.X_train[:,np.array(nontext_inds)]
+        before_inds = range(nontext_inds[0])
+        after_inds = range(nontext_inds[-1]+1, self.X_train.shape[1])
+        scaler = StandardScaler()
+        X_train_add_scaled = scaler.fit_transform(X_train_add)
+        self.X_train = np.hstack([
+            self.X_train[:, before_inds],
+            X_train_add_scaled,
+            self.X_train[:, after_inds]])
+
+        X_dev_add = self.X_dev[:,np.array(nontext_inds)]
+        X_dev_add_scaled = scaler.transform(X_dev_add)
+        self.X_dev = np.hstack([
+            self.X_dev[:, before_inds],
+            X_dev_add_scaled,
+            self.X_dev[:, after_inds]])
+
+        X_test_add = self.X_test[:,np.array(nontext_inds)]
+        X_test_add_scaled = scaler.transform(X_test_add)
+        X_test = X_test_add_scaled
+        self.X_test = np.hstack([
+            self.X_test[:, before_inds],
+            X_test_add_scaled,
+            self.X_test[:, after_inds]])

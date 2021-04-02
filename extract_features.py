@@ -71,9 +71,12 @@ class FeatureExtractor():
         """
         features = feature_str.split(',')
         self.post_features, self.user_features = False, False
+        self.post_nontext_only = False
         self.text_features, self.graph_features = False, False
-        if 'post' in features:
+        if 'post' in features or 'post_nontext' in features:
             self.post_features = True
+            if 'post_nontext' in features: # no hashtags
+                self.post_nontext_only = True
         if 'text' in features:
             self.user_features = True
             self.text_features = True
@@ -95,7 +98,7 @@ class FeatureExtractor():
                     dataset.X_train, dataset.y_train,
                     dataset.X_test, dataset.y_test
             Args:
-                data: Dataset
+                dataset: Dataset
                 dev: Whether to split to include a dev set.
                     If False, will just split into training
                     and test.
@@ -132,6 +135,8 @@ class FeatureExtractor():
                 X_train, y_train, test_size=len(y_test), random_state=9)
             dataset.set_folds(X_train, X_test, y_train, y_test,
                 X_dev=X_dev, y_dev=y_dev)
+            dataset.scale_nontext_features(self.nontext_inds)
+
         else: # sklearn
             scaler = StandardScaler()
             X_train = scaler.fit_transform(X_train)
@@ -152,24 +157,28 @@ class FeatureExtractor():
         """
         feature_parts = {}
         if organization == 'learning-to-rank':
-            # Post tags
-            feature_opts = {} # reblog and nonreblog
+
             if self.word_inds: # PyTorch
                 combo = 'concat'
             else: # sklearn
                 combo = 'subtract'
-            for reblog_type in ['reblog', 'nonreblog']:
-                if self.word_inds: # for PyTorch
-                    fn = self.get_word_inds
-                    self.build_vocab()
-                else:
-                    fn = self.word_embeddings
-                feature_opts[reblog_type] = np.array([fn(
-                        utils.string_list2str(tags)) for tags in tqdm(
-                        data[f'post_tags_{reblog_type}'], ncols=70)])
-            feature_parts['post_tags_emb'] = rank_feature_transform(
-                feature_opts['reblog'], feature_opts['nonreblog'], data.label,
-                combo=combo)
+
+            # TODO: Make these separate functions since they are long
+            # Post tags
+            if not self.post_nontext_only:
+                feature_opts = {} # reblog and nonreblog
+                for reblog_type in ['reblog', 'nonreblog']:
+                    if self.word_inds: # for PyTorch
+                        fn = self.get_word_inds
+                        self.build_vocab()
+                    else:
+                        fn = self.word_embeddings
+                    feature_opts[reblog_type] = np.array([fn(
+                            utils.string_list2str(tags)) for tags in tqdm(
+                            data[f'post_tags_{reblog_type}'], ncols=70)])
+                feature_parts['post_tags_emb'] = rank_feature_transform(
+                    feature_opts['reblog'], feature_opts['nonreblog'], data.label,
+                    combo=combo)
 
             # Post notes
             feature_opts = {} # reblog and nonreblog
@@ -193,20 +202,20 @@ class FeatureExtractor():
             if not self.word_inds: # sklearn
                 feature_parts['post_note_count'] = feature_parts[
                     'post_note_count'].reshape(-1,1)
-            post_features = np.hstack([
-                feature_parts['post_tags_emb'],
-                feature_parts['post_note_count'],
-                feature_parts['post_type']
-            ])
+
+            post_features = np.hstack(list(feature_parts.values()))
 
             # Pass on which indices of feature vectors aren't text
             # and which are reblog (for PyTorch)
             if self.word_inds:
-                self.nontext_inds = range(feature_parts[
-                    'post_tags_emb'].shape[1], post_features.shape[1])
+                if self.post_nontext_only: # assuming don't have text and graph
+                    self.nontext_inds = range(post_features.shape[1])
+                else:
+                    self.nontext_inds = range(feature_parts[
+                        'post_tags_emb'].shape[1], post_features.shape[1])
                 offset = 0
                 self.reblog_inds = []
-                for segment, feats in feature_parts.items():
+                for feats in feature_parts.values():
                     # Add in first half of segments (reblog/nonreblog concat)
                     self.reblog_inds += range(offset, offset + int(feats.shape[1]/2))
                     offset += feats.shape[1]
@@ -232,6 +241,7 @@ class FeatureExtractor():
                 feature_parts['post_note_count'].reshape(-1,1),
                 feature_parts['post_type'].reshape(-1,1)
             ])
+
         return post_features
 
     def text_embeddings_ltr(self, data):

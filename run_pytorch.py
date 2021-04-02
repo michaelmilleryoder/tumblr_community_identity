@@ -5,31 +5,39 @@ Definitions for PyTorch models.
 @date 2021
 """
 
-import math
+import os
 import datetime
+import pickle
 import pdb
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.optim as optim
 from torch.utils.data import Dataset
+from torch.utils.data import DataLoader
 
 from ffn import FFNTextClassifier
 from cnn import CNNTextClassifier
 
 
-class TorchModel():
-    """ Class to invoke one of possible torch models """
+class RunPyTorch():
+    """ Class to invoke one of possible pytorch models, store parameters """
 
-    def __init__(self, clf_type: str, extractor, use_cuda: bool = False):
+    def __init__(self, clf_type: str, data, extractor, epochs: int, 
+                    use_cuda: bool = False, debug: bool = False):
         """ Args:
                clf_type: classifier type
                extractor: FeatureExtractor, for the parameters
+               data: Dataset
         """
         self.clf_type = clf_type
+        self.data = data
         self.extractor = extractor
-        #self.epochs = epochs
+        self.epochs = epochs
+        self.debug = debug
+        self.subset = 100 # for debugging
         self.clfs = {
             'cnn': CNNTextClassifier,
             'ffn': FFNTextClassifier
@@ -39,9 +47,77 @@ class TorchModel():
             device = torch.device("cuda")
         else:
             device = torch.device("cpu")
-        self.clf = self.clfs[self.clf_type](extractor, device).to(device)
+        self.model = self.clfs[self.clf_type](extractor, device).to(device)
         #if self.use_cuda:
-        #    self.clf = MyDataParallel(self.clf)
+        #    self.model = MyDataParallel(self.model)
+
+        # Parameters (should make a class, or yaml config file?)
+        self.run_params = {
+            'ffn': {
+                'batch_size': 32,
+                'learning_rate': 0.001,
+                'lossfunc': nn.BCELoss()
+            }
+        }
+        self.run_params['ffn']['optim'] = optim.SGD(self.model.parameters(), 
+            lr=self.run_params['ffn']['learning_rate'])
+        self.score = None
+
+    def run(self):
+        """ Train and evaluate a PyTorch model """
+        
+        dev = DatasetMapper(self.data.X_dev, self.data.y_dev)
+        test = DatasetMapper(self.data.X_test, self.data.y_test)
+
+        if self.debug:
+            train = DatasetMapper(self.data.X_train[:self.subset], 
+                self.data.y_train[:self.subset])
+        else:
+            train = DatasetMapper(self.data.X_train, self.data.y_train)
+            
+            if self.debug:
+                # Save out for debugging
+                with open('/projects/tumblr_community_identity/tmp/X_train.pkl', 
+                    'wb') as f:
+                    pickle.dump(self.data.X_train, f)
+                with open('/projects/tumblr_community_identity/tmp/y_train.pkl', 
+                    'wb') as f:
+                    pickle.dump(self.data.y_train, f)
+
+        # Initialize loaders
+        pin = self.use_cuda
+
+        params = self.run_params[self.clf_type]
+        loader_train = DataLoader(train, batch_size=params['batch_size'],
+            pin_memory=pin)
+        loader_dev = DataLoader(dev, batch_size=params['batch_size'],
+            pin_memory=pin)
+        loader_test = DataLoader(test, batch_size=params['batch_size'],
+            pin_memory=pin)
+
+        # Start training
+        optimizer = self.run_params[self.clf_type]['optim']
+        lossfunc = self.run_params[self.clf_type]['lossfunc']
+        for epoch in range(self.epochs):
+            if self.debug:
+                train_epoch(epoch, self.model, loader_train, loader_dev, 
+                    optimizer, self.data.y_train[:self.subset], self.data.y_dev,
+                    lossfunc)
+            else:
+                train_epoch(epoch, self.model, loader_train, loader_dev, 
+                    optimizer, self.data.y_train, self.data.y_dev,
+                    lossfunc)
+
+        # Test
+        self.score = test_model(self.model, loader_test, self.data.y_test)
+
+        # Save model
+        outpath = os.path.join('../models/', self.clf_type + self.model.name \
+             + '.model')
+        torch.save(self.model.state_dict(), outpath)
+        print(f"Model saved to {outpath}")
+
+        return self.score
 
 
 class MyDataParallel(nn.DataParallel):

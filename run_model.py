@@ -1,34 +1,30 @@
 """
 Train and test reblog prediction models.
 Runs logistic regression, SVM and simple feedforward network with sklearn.
-Runs CNN and more complicated neural nets with PyTorch.
+Runs a feedforward network, CNN and more complicated neural nets with PyTorch.
 
 @author Michael Miller Yoder
 @date 2021
 """
 
 import os
+import pickle
+import pdb
 
 import numpy as np
 from sklearn import linear_model
 from sklearn import neural_network
 from sklearn import model_selection
 from sklearn import svm
-from sklearn.preprocessing import StandardScaler
-import torch
-import torch.optim as optim
-import torch.nn as nn
-from torch.utils.data import DataLoader
-import pickle
-import pdb
 
-from torch_model import TorchModel, FFNTextClassifier, DatasetMapper, train_epoch, test_model
+from run_pytorch import RunPyTorch
 
 
 class Experiment():
     """ Encapsulates training and testing a model in an experiment. """
 
-    def __init__(self, extractor, data, classifier_type, use_cuda=False, epochs=1):
+    def __init__(self, extractor, data, classifier_type, use_cuda=False, epochs=1,
+                    debug=False):
         """ Args:
                 extractor: FeatureExtractor, for the parameters
                 data: Dataset
@@ -37,6 +33,7 @@ class Experiment():
         self.data = data
         self.clf_type = classifier_type
         self.epochs = epochs
+        self.debug = debug
         self.use_cuda = use_cuda
         self.model = None
         self.score = None
@@ -47,7 +44,9 @@ class Experiment():
     def run(self):
         """ Train the model, evaluate on test set """
         if self.clf_type in ['cnn', 'ffn']:
-            self.run_pytorch()
+            exp = RunPyTorch(self.clf_type, self.data, self.extractor, 
+                epochs=self.epochs, use_cuda=self.use_cuda, debug=self.debug)
+            self.score = exp.run()
         else:
             self.run_sklearn()
 
@@ -70,92 +69,6 @@ class Experiment():
         self.score = self.model.score(self.data.X_test, self.data.y_test)
         self.train_pred = self.model.predict(self.data.X_train)
         self.test_pred = self.model.predict(self.data.X_test)
-
-    def run_pytorch(self):
-        """ Train and evaluate models from pytorch """
-        #self.model = TorchModel(self.clf_type, self.extractor, epochs=self.epochs,
-        #     use_cuda=self.use_cuda)
-
-        # Training parameters
-        batch_size = 32
-        learning_rate = 0.001
-        criterion = nn.BCELoss()
-
-        debug = False
-        subset = 100 # for debugging
-
-        # Select features (should be a function)
-        X_train_add = self.data.X_train[:,np.array(self.extractor.nontext_inds)]
-        scaler = StandardScaler()
-        X_train_add_scaled = scaler.fit_transform(X_train_add)
-        X_train = X_train_add_scaled
-
-        X_dev_add = self.data.X_dev[:,np.array(self.extractor.nontext_inds)]
-        X_dev_add_scaled = scaler.transform(X_dev_add)
-        X_dev = X_dev_add_scaled
-
-        X_test_add = self.data.X_test[:,np.array(self.extractor.nontext_inds)]
-        X_test_add_scaled = scaler.transform(X_test_add)
-        X_test = X_test_add_scaled
-
-        dev = DatasetMapper(X_dev, self.data.y_dev)
-        test = DatasetMapper(X_test, self.data.y_test)
-
-        if debug:
-            train = DatasetMapper(X_train[:subset], self.data.y_train[:subset])
-        else:
-            train = DatasetMapper(X_train, self.data.y_train)
-            
-            # Save out for debugging
-            with open('/projects/tumblr_community_identity/tmp/X_train.pkl', 'wb') as f:
-                pickle.dump(self.data.X_train, f)
-            with open('/projects/tumblr_community_identity/tmp/y_train.pkl', 'wb') as f:
-                pickle.dump(self.data.y_train, f)
-
-        # Initialize loaders
-        if self.use_cuda:
-            pin = True
-        else:
-            pin = False
-
-        loader_train = DataLoader(train, batch_size=batch_size,
-            pin_memory=pin)
-        loader_dev = DataLoader(dev, batch_size=batch_size,
-            pin_memory=pin)
-        loader_test = DataLoader(test, batch_size=batch_size,
-            pin_memory=pin)
-
-        # Debugging--running the model right here
-        model = FFNTextClassifier(self.extractor, device = torch.device("cpu"))
-
-        # Define optimizer
-        #optimizer = optim.RMSprop(self.model.clf.parameters(),
-        #    lr=learning_rate)
-        optimizer = optim.SGD(model.parameters(),
-            lr=learning_rate)
-        #optimizer = optim.Adam(self.model.clf.parameters(),
-        #    lr=learning_rate)
-
-        # Starts training phase
-        for epoch in range(self.epochs):
-            if debug:
-                train_epoch(epoch, model, loader_train, loader_dev, 
-                    optimizer, self.data.y_train[:subset], self.data.y_dev,
-                    criterion)
-            else:
-                train_epoch(epoch, model, loader_train, loader_dev, 
-                    optimizer, self.data.y_train, self.data.y_dev,
-                    criterion)
-
-        # Test
-        #self.score = test_model(self.model.clf, loader_test, self.data.y_test)
-        self.score = test_model(model, loader_test, self.data.y_test)
-
-        # Save model
-        #outpath = os.path.join('../models/', self.clf_type + self.model.clf.name \
-        #     + '.model')
-        #torch.save(self.model.clf.state_dict(), outpath)
-        #print(f"Model saved to {outpath}")
 
     def save_output(self, output_dirpath):
         """ Save score and predictions """
