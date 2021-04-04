@@ -5,6 +5,11 @@ CNN in PyTorch
 @date 2021
 """
 
+import datetime
+import math
+import pdb
+
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -13,7 +18,7 @@ class CNNTextClassifier(nn.Module):
     """ From https://github.com/FernandoLpz/Text-Classification-CNN-PyTorch/
         blob/master/src/model/model.py """
 
-    def __init__(self, extractor, device, epochs):
+    def __init__(self, extractor, device):
         """ Args:
                 extractor: FeatureExtractor, for the parameters
         """
@@ -33,7 +38,6 @@ class CNNTextClassifier(nn.Module):
 
         # Dropout definition
         #self.dropout = nn.Dropout(0.25)
-        #self.dropout = nn.Dropout(0)
 
         # CNN parameters definition
         # Kernel sizes
@@ -47,19 +51,13 @@ class CNNTextClassifier(nn.Module):
         # Number of strides for each convolution
         self.stride = 2
 
-        # Training parameters
-        self.epochs = epochs
-        self.batch_size = 32
-        self.learning_rate = 0.01
-
-        """ ORIGINAL
-        # Embedding layer definition
+        ## Embedding layer definition
         weights = torch.FloatTensor(self.word_embs.wv.vectors).to(device)
         zeros = torch.zeros(1, self.embedding_size).to(device)
         weights_with_padding = torch.cat((zeros, weights), 0).to(device)
         self.embedding = nn.Embedding.from_pretrained(weights_with_padding,
             padding_idx=0).to(device)
-        
+
         # Convolution layers definition
         self.conv_1 = nn.Conv1d(self.seq_len, self.out_size, self.kernel_1, self.stride)
         self.conv_2 = nn.Conv1d(self.seq_len, self.out_size, self.kernel_2, self.stride)
@@ -73,131 +71,66 @@ class CNNTextClassifier(nn.Module):
         self.pool_4 = nn.MaxPool1d(self.kernel_4, self.stride)
         
         # Fully connected layer definition
-        self.fc = nn.Linear(self.in_features_fc(), 1)
-        """
+        #self.fc = nn.Linear(self.in_features_fc() + 36, 1)
+        self.fc = nn.Linear(3730, 1)
 
-        # DEBUG
-        ## Embedding layer definition
-        weights = torch.FloatTensor(self.word_embs.wv.vectors).to(device)
-        zeros = torch.zeros(1, self.embedding_size).to(device)
-        weights_with_padding = torch.cat((zeros, weights), 0).to(device)
-        self.embedding = nn.Embedding.from_pretrained(weights_with_padding,
-            padding_idx=0).to(device)
-
-        ## Convolution layers definition
-        #self.conv_1 = nn.Conv1d(self.seq_len, self.out_size, self.kernel_1, self.stride)
-
-        ## Max pooling layers definition
-        #self.pool_1 = nn.MaxPool1d(self.kernel_1, self.stride)
-
-        #self.fc = nn.Linear(1042, 1).to(device)
-        #self.fc1 = nn.Linear(18, 18).to(device) # for non-text baseline
-        #self.fc2 = nn.Linear(18, 9).to(device)
-        #self.fc3 = nn.Linear(9, 1).to(device)
-        self.fc1 = nn.Linear(146, 146).to(device)
-        self.fc2 = nn.Linear(146, 64).to(device)
-        self.fc3 = nn.Linear(64, 32).to(device)
-        self.fc4 = nn.Linear(32, 1).to(device)
-
+        self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
         """ Called indirectly through model(input) """
 
-        """ ORIGINAL
-        # Separate out text features for CNN and additional features
-        x_text = x[:,np.array([i for i in range(x.shape[1]) if \
-            i not in self.extractor.nontext_inds])]
-        x_add = x[:,np.array(self.extractor.nontext_inds)]
-
-        # Sequence of tokens is filtered through an embedding layer
-        x = self.embedding(x_text)
-        
-        # Convolution layer 1 is applied
-        x1 = self.conv_1(x)
-        x1 = torch.relu(x1)
-        x1 = self.pool_1(x1)
-        
-        # Convolution layer 2 is applied
-        x2 = self.conv_2(x)
-        x2 = torch.relu((x2))
-        x2 = self.pool_2(x2)
-        
-        # Convolution layer 3 is applied
-        x3 = self.conv_3(x)
-        x3 = torch.relu(x3)
-        x3 = self.pool_3(x3)
-        
-        # Convolution layer 4 is applied
-        x4 = self.conv_4(x)
-        x4 = torch.relu(x4)
-        x4 = self.pool_4(x4)
-        
-        # The output of each convolutional layer is concatenated into a unique vector
-        union = torch.cat((x1, x2, x3, x4), 2)
-        union = union.reshape(union.size(0), -1)
-        flattened = torch.cat((union, x_add), 1) # add post notes and post type here
-        """
-
-        # DEBUG
         x_reblog_text = x[:,np.array([i for i in range(x.shape[1]) if \
             i not in self.extractor.nontext_inds and \
-            i in self.extractor.reblog_inds])]
+            i in self.extractor.reblog_inds])].long()
         x_nonreblog_text = x[:,np.array([i for i in range(x.shape[1]) if \
             i not in self.extractor.nontext_inds and \
-            i not in self.extractor.reblog_inds])]
-        #x_text = x[:,np.array([i for i in range(x.shape[1]) if \
-        #    i not in self.extractor.nontext_inds])]
+            i not in self.extractor.reblog_inds])].long()
         x_add = x[:,np.array(self.extractor.nontext_inds)].float()
 
         x_reblog_text = self.embedding(x_reblog_text)
-        mean_reblog_text = torch.mean(x_reblog_text, 1, False)
         x_nonreblog_text = self.embedding(x_nonreblog_text)
-        mean_nonreblog_text = torch.mean(x_nonreblog_text, 1, False)
 
         ## Convolution layer 1 is applied
-        #x1_reblog = self.conv_1(x_reblog_text)
-        #x1_reblog = torch.relu(x1_reblog)
-        #x1_reblog = self.pool_1(x1_reblog)
+        x1_reblog = self.conv_1(x_reblog_text)
+        x1_reblog = self.relu(x1_reblog)
+        x1_reblog = self.pool_1(x1_reblog)
+        x1_nonreblog = self.conv_1(x_nonreblog_text)
+        x1_nonreblog = self.relu(x1_nonreblog)
+        x1_nonreblog = self.pool_1(x1_nonreblog)
 
-        #x1_nonreblog = self.conv_1(x_nonreblog_text)
-        #x1_nonreblog = torch.relu(x1_nonreblog)
-        #x1_nonreblog = self.pool_1(x1_nonreblog)
+        ## Convolution layer 2 is applied
+        x2_reblog = self.conv_2(x_reblog_text)
+        x2_reblog = self.relu(x2_reblog)
+        x2_reblog = self.pool_2(x2_reblog)
+        x2_nonreblog = self.conv_2(x_nonreblog_text)
+        x2_nonreblog = self.relu(x2_nonreblog)
+        x2_nonreblog = self.pool_2(x2_nonreblog)
 
-        #union1 = torch.cat((x1_reblog, x1_nonreblog), 2)
-        #union1 = union1.reshape(union1.size(0), -1)
-        #flattened = torch.cat((union1, x_add), 1)
-        union1 = torch.cat((mean_reblog_text, mean_nonreblog_text), 1)
+        ## Convolution layer 3 is applied
+        x3_reblog = self.conv_3(x_reblog_text)
+        x3_reblog = self.relu(x3_reblog)
+        x3_reblog = self.pool_3(x3_reblog)
+        x3_nonreblog = self.conv_3(x_nonreblog_text)
+        x3_nonreblog = self.relu(x3_nonreblog)
+        x3_nonreblog = self.pool_3(x3_nonreblog)
+
+        ## Convolution layer 4 is applied
+        x4_reblog = self.conv_4(x_reblog_text)
+        x4_reblog = self.relu(x4_reblog)
+        x4_reblog = self.pool_4(x4_reblog)
+        x4_nonreblog = self.conv_4(x_nonreblog_text)
+        x4_nonreblog = self.relu(x4_nonreblog)
+        x4_nonreblog = self.pool_4(x4_nonreblog)
+
+        union1 = torch.cat((x1_reblog, x1_nonreblog, x2_reblog, x2_nonreblog,
+            x3_reblog, x3_nonreblog, x4_reblog, x4_nonreblog), 2)
         union1 = union1.reshape(union1.size(0), -1)
         flattened = torch.cat((union1, x_add), 1)
-        #flattened = torch.FloatTensor(x_add.float())
     
         # The "flattened" vector is passed through a fully connected layer
-        out = self.fc1(flattened)
-        # Dropout is applied        
-        #out = self.dropout(out)
-        # Activation function is applied
-        out = torch.relu(out)
-
-        # The "flattened" vector is passed through a fully connected layer
-        out = self.fc2(out)
-        # Dropout is applied        
-        #out = self.dropout(out)
-        # Activation function is applied
-        out = torch.relu(out)
-        
-        # The "flattened" vector is passed through a fully connected layer
-        out = self.fc3(out)
-        # Dropout is applied        
-        #out = self.dropout(out)
-        # Activation function is applied
-        out = torch.relu(out)
-        
-        # The "flattened" vector is passed through a fully connected layer
-        out = self.fc4(out)
-        # Dropout is applied        
-        #out = self.dropout(out)
-        # Activation function is applied
-        out = torch.relu(out)
+        out = self.fc(flattened)
+        out = self.sigmoid(out)
         
         return out.squeeze()
 
@@ -239,5 +172,4 @@ class CNNTextClassifier(nn.Module):
         # + space for additional non-text post features
         output_size = (out_pool_1 + out_pool_2 + out_pool_3 + out_pool_4) * \
                 self.out_size + len(self.extractor.nontext_inds)
-        return output_size
-    
+        return output_size * 2

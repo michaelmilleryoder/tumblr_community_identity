@@ -10,15 +10,13 @@ import datetime
 import pickle
 import pdb
 
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 
-from ffn import FFNTextClassifier
+from ffn import FFNTextClassifier, FFNSimpleClassifier
 from cnn import CNNTextClassifier
 
 
@@ -32,15 +30,18 @@ class RunPyTorch():
                extractor: FeatureExtractor, for the parameters
                data: Dataset
         """
-        self.clf_type = clf_type
-        self.data = data
         self.extractor = extractor
+        self.clf_type = clf_type
+        if self.extractor.post_nontext_only:
+            self.clf_type = 'ffn_nontext'
+        self.data = data
         self.epochs = epochs
         self.debug = debug
         self.subset = 100 # for debugging
         self.clfs = {
             'cnn': CNNTextClassifier,
-            'ffn': FFNTextClassifier
+            'ffn': FFNTextClassifier,
+            'ffn_nontext': FFNSimpleClassifier
         }
         self.use_cuda = use_cuda
         if self.use_cuda:
@@ -52,15 +53,21 @@ class RunPyTorch():
         #    self.model = MyDataParallel(self.model)
 
         # Parameters (should make a class, or yaml config file?)
-        self.run_params = {
-            'ffn': {
-                'batch_size': 32,
-                'learning_rate': 0.001,
-                'lossfunc': nn.BCELoss()
-            }
+        self.run_params = {}
+        self.run_params['ffn'] =  {
+            'batch_size': 32,
+            'learning_rate': 0.001,
+            'lossfunc': nn.BCELoss()
         }
         self.run_params['ffn']['optim'] = optim.SGD(self.model.parameters(), 
             lr=self.run_params['ffn']['learning_rate'])
+        self.run_params['cnn'] =  {
+            'batch_size': 32,
+            'learning_rate': 0.001,
+            'lossfunc': nn.BCELoss()
+        }
+        self.run_params['cnn']['optim'] = optim.SGD(self.model.parameters(), 
+            lr=self.run_params['cnn']['learning_rate'])
         self.score = None
 
     def run(self):
@@ -86,7 +93,6 @@ class RunPyTorch():
 
         # Initialize loaders
         pin = self.use_cuda
-
         params = self.run_params[self.clf_type]
         loader_train = DataLoader(train, batch_size=params['batch_size'],
             pin_memory=pin)
@@ -130,6 +136,7 @@ class MyDataParallel(nn.DataParallel):
 
 
 class DatasetMapper(Dataset):
+    """ Creates Dataset object for DataLoader """
     def __init__(self, x, y):
         self.x = x
         self.y = y
@@ -142,7 +149,8 @@ class DatasetMapper(Dataset):
 
 
 def evaluation(model, loader_test):
-        
+    """ Evaluate the model """
+
     # Set the model in evaluation mode
     model.eval()
     predictions = []
@@ -183,7 +191,7 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
     if epoch + 1 == 1:
         print(f'Logging to {log_fpath}')
         with open(log_fpath, 'w') as f:
-            f.write('datetime,epoch,iteration,loss,train_accuracy,dev_accuracy\n')
+            f.write('datetime,epoch,iteration,loss,dev_loss\n')
     epochloss = 0
 
     # Starts batch training
@@ -207,32 +215,40 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
         # Gradients update
         optimizer.step()
 
-        # Metrics calculation
-        #if (i+1) % 500 == 0 or i+1 == len(loader_train):
-        if i+1 == len(loader_train):
-            print("[%s] Epoch: %d, iter: %d, loss: %.3f" 
-                % (datetime.datetime.now().strftime(
-                "%Y-%m-%d %H:%M"), epoch+1, i+1, epochloss/len(y_train)))
-            with open(log_fpath, 'a') as f:
-                f.write(','.join([
-                    datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
-                    str(epoch+1), str(i+1), str(loss.item())]) + '\n')
+    # Dev loss calculation
+    devloss = 0
+    with torch.no_grad():
+        for x_batch, y_batch in loader_dev:
+            y_batch = y_batch.type(torch.FloatTensor).to(model.device)
+            y_pred = model(x_batch.to(model.device))
+            loss = criterion(y_pred, y_batch)
+            devloss += loss.item() * x_batch.size(0) 
 
-            # Evaluation phase
-            #dev_predictions = evaluation(model, loader_dev)
-            #train_predictions = evaluation(model, loader_train)
+    # Metrics calculation
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M')
+    train_avgloss = epochloss/len(y_train)
+    dev_avgloss = devloss/len(y_dev)
+    print("[%s] Epoch: %d, iter: %d, loss: %.3f, dev loss: %.3f" 
+        % (timestamp, epoch+1, len(loader_train), train_avgloss, dev_avgloss))
+    with open(log_fpath, 'a') as f:
+        f.write(','.join([timestamp, str(epoch+1), str(len(loader_train)), 
+            str(train_avgloss), str(dev_avgloss)]) + '\n')
 
-            #train_accuracy = calculate_accuracy(y_train, train_predictions)
-            #dev_accuracy = calculate_accuracy(y_dev, dev_predictions)
-            #print("[%s] Epoch: %d, iter: %d, loss: %.3f, train acc: %.4f, " 
-            #    "dev acc: %.4f" % (datetime.datetime.now().strftime(
-            #    "%Y-%m-%d %H:%M"), epoch+1, i+1, loss.item(), train_accuracy, 
-            #    dev_accuracy))
-            #with open(log_fpath, 'a') as f:
-            #    f.write(','.join([
-            #        datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
-            #        str(epoch+1), str(i+1), str(loss.item()), str(train_accuracy), 
-            #        str(dev_accuracy)]) + '\n')
+    # Evaluation phase
+    #dev_predictions = evaluation(model, loader_dev)
+    #train_predictions = evaluation(model, loader_train)
+
+    #train_accuracy = calculate_accuracy(y_train, train_predictions)
+    #dev_accuracy = calculate_accuracy(y_dev, dev_predictions)
+    #print("[%s] Epoch: %d, iter: %d, loss: %.3f, train acc: %.4f, " 
+    #    "dev acc: %.4f" % (datetime.datetime.now().strftime(
+    #    "%Y-%m-%d %H:%M"), epoch+1, i+1, loss.item(), train_accuracy, 
+    #    dev_accuracy))
+    #with open(log_fpath, 'a') as f:
+    #    f.write(','.join([
+    #        datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),
+    #        str(epoch+1), str(i+1), str(loss.item()), str(train_accuracy), 
+    #        str(dev_accuracy)]) + '\n')
 
 
 def test_model(model, loader_test, y_test):
