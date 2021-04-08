@@ -32,8 +32,6 @@ def rank_feature_transform(reblog_feats_list, nonreblog_feats_list, labels,
     comparison_feats = []
     for reblog_feats, nonreblog_feats, label in zip(
         reblog_feats_list, nonreblog_feats_list, labels):
-        #if reblog_feats.ndim == 0 or nonreblog_feats.ndim == 0:
-        #    pdb.set_trace()
         if label == 0:
             if combo == 'subtract':
                 comparison_feats.append(reblog_feats - nonreblog_feats)
@@ -91,6 +89,8 @@ class FeatureExtractor():
         self.vocab = None
         self.nontext_inds = None # nontext feature vector indices, for PyTorch
         self.reblog_inds = None # reblog feature vector indices, for PyTorch
+        self.text_inds = {} # text blog desc feature vector indices, for PyTorch
+        self.graph_inds = {} # graph blog desc feature vector indices, for PyTorch
 
     def extract(self, dataset, dev=False):
         """ Takes a Dataset and extracts features.
@@ -119,6 +119,13 @@ class FeatureExtractor():
             if features is None:
                 features = user_features
             else:
+                # Adjust indices
+                if self.text_features:
+                    self.text_inds = {key: [el+features.shape[1] for el in val] \
+                        for key,val in self.text_inds.items()}
+                if self.graph_features:
+                    self.graph_inds = {key: [el+features.shape[1] for el in val] \
+                        for key,val in self.graph_inds.items()}
                 features = np.hstack([features, user_features])
 
         # Labels to predict
@@ -264,16 +271,26 @@ class FeatureExtractor():
                 parts[user_type] = np.array([fn(desc) for desc in \
                     tqdm(data[f'processed_blog_description_{user_type}'], ncols=70)])
         for reblog_type in ['reblog', 'nonreblog']:
-            #parts[reblog_type] = np.hstack([
-            #    parts['follower'],
-            #    parts[f'followee_{reblog_type}']])
-            parts[reblog_type] = parts['follower'] - parts[f'followee_{reblog_type}']
+            parts[reblog_type] = np.hstack([
+                parts['follower'],
+                parts[f'followee_{reblog_type}']])
+            #parts[reblog_type] = parts['follower'] - parts[f'followee_{reblog_type}']
+            # ^ for sklearn
         if self.word_inds: # PyTorch
             combo = 'concat'
         else: # sklearn
             combo = 'subtract'
         text_embeddings = rank_feature_transform(
             parts['reblog'], parts['nonreblog'], data.label, combo=combo)
+
+        # Pass on which indices of feature vectors correspond to which follower
+        # (for PyTorch)
+        if self.word_inds:
+            midpt = int(text_embeddings.shape[1]/2)
+            self.text_inds['reblog'] = range(0, midpt)
+            self.text_inds['nonreblog'] = range(midpt, text_embeddings.shape[1])
+            text_embeddings = text_embeddings.astype(int)
+
         return text_embeddings
 
     def graph_embeddings_ltr(self, data):
@@ -292,12 +309,23 @@ class FeatureExtractor():
                         np.zeros(self.graph_embs.vector_size))
             parts[user_type] = np.array(parts[user_type])
         for reblog_type in ['reblog', 'nonreblog']:
-            #parts[reblog_type] = np.hstack([
-            #    parts['follower'],
-            #    parts[f'followee_{reblog_type}']])
-            parts[reblog_type] = parts['follower'] - parts[f'followee_{reblog_type}']
+            parts[reblog_type] = np.hstack([
+                parts['follower'],
+                parts[f'followee_{reblog_type}']])
+            #parts[reblog_type] = parts['follower'] - parts[f'followee_{reblog_type}']
+        if self.word_inds: # PyTorch
+            combo = 'concat'
+        else: # sklearn
+            combo = 'subtract'
         graph_embeddings = rank_feature_transform(
-            parts['reblog'], parts['nonreblog'], data.label)
+            parts['reblog'], parts['nonreblog'], data.label, combo=combo)
+
+        # Pass on which indices of feature vectors correspond to which follower
+        # (for PyTorch)
+        if self.word_inds:
+            midpt = int(graph_embeddings.shape[1]/2)
+            self.graph_inds['reblog'] = range(0, midpt)
+            self.graph_inds['nonreblog'] = range(midpt, graph_embeddings.shape[1])
         return graph_embeddings
 
     def text_embeddings_bin(self, data):
@@ -371,6 +399,8 @@ class FeatureExtractor():
             if user_embeddings is None:
                 user_embeddings = graph_embeddings
             else:
+                self.graph_inds = {key: [el+user_embeddings.shape[1] for el in val] \
+                    for key,val in self.graph_inds.items()}
                 user_embeddings = np.hstack([user_embeddings, graph_embeddings])
         return user_embeddings
 

@@ -14,9 +14,387 @@ import torch
 import torch.nn as nn
 
 
+class CNNTextGraphClassifier(nn.Module):
+    """ 
+        CNN for post+text+graph features.
+        From https://github.com/FernandoLpz/Text-Classification-CNN-PyTorch/
+        blob/master/src/model/model.py 
+    """
+
+    def __init__(self, extractor, device):
+        """ Args:
+                extractor: FeatureExtractor, for the parameters
+        """
+
+        super().__init__()
+        self.extractor = extractor
+        self.device = device
+        self.clf_type = 'cnn'
+        self.name = 'model' + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+
+        # Parameters regarding text preprocessing
+        self.word_embs = self.extractor.word_embs
+        self.seq_len = self.extractor.padding_size
+        self.num_words = len(self.extractor.word_embs.wv.vocab)
+        self.embedding_size = self.extractor.word_embs.vector_size
+
+        # CNN parameters definition
+        # Kernel sizes
+        self.kernel_sizes = range(2,6)
+        # Output size for each convolution
+        self.out_size = 32
+        # Number of strides for each convolution
+        self.stride = 2
+        # Dropout
+        #self.dropout = 0.25
+        self.dropout = 0
+
+        ## Embedding layer definition
+        weights = torch.FloatTensor(self.word_embs.wv.vectors).to(device)
+        zeros = torch.zeros(1, self.embedding_size).to(device)
+        weights_with_padding = torch.cat((zeros, weights), 0).to(device)
+        self.embedding = nn.Embedding.from_pretrained(weights_with_padding,
+            padding_idx=0).to(device)
+
+        # Convolution layers definition (post)
+        self.conv_block_post = {}
+        for kernel in self.kernel_sizes:
+            self.conv_block_post[kernel] = self.conv_block(self.seq_len, kernel).to(self.device)
+
+        # Convolution layers definition (text)
+        self.conv_block_text = {}
+        for kernel in self.kernel_sizes:
+            self.conv_block_text[kernel] = self.conv_block(self.seq_len*2, kernel).to(self.device)
+
+        # Graph FFN layers
+        self.fc_graph = nn.Sequential(
+            nn.Linear(200, 128),
+            nn.ReLU(),
+            nn.Linear(128, 32),
+            nn.ReLU(),
+        ).to(self.device)
+
+        self.fc_block = fc_block(7842, self.dropout)
+
+    def forward(self, x):
+        """ Called indirectly through model(input).
+            TODO: probably separate input x as arguments
+        """
+
+        # Post features
+        tag_feats = {}
+        tag_feats['reblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i not in self.extractor.nontext_inds and \
+            i in self.extractor.reblog_inds])].long()
+        tag_feats['nonreblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i not in self.extractor.nontext_inds and \
+            i not in self.extractor.graph_inds['reblog'] and \
+            i not in self.extractor.graph_inds['nonreblog'] and \
+            i not in self.extractor.text_inds['reblog'] and \
+            i not in self.extractor.text_inds['nonreblog'] and \
+            i not in self.extractor.reblog_inds])].long()
+        tag_feats['reblog'] = self.embedding(tag_feats['reblog'])
+        tag_feats['nonreblog'] = self.embedding(tag_feats['nonreblog'])
+        x_add = x[:,np.array(self.extractor.nontext_inds)].float()
+
+        post_feats = {'reblog': {}, 'nonreblog': {}}
+        for reblog_type in ['reblog', 'nonreblog']:
+            for kernel in self.kernel_sizes:
+                post_feats[reblog_type][kernel] = self.conv_block_post[kernel](
+                    tag_feats[reblog_type])
+
+        post_embs_list = sum([[post_feats['reblog'][kernel], 
+            post_feats['nonreblog'][kernel]] for kernel in self.kernel_sizes], [])
+        post_embs = torch.cat(post_embs_list, 2)
+        post_embs = post_embs.reshape(post_embs.size(0), -1)
+
+        # Text blog description features
+        text_x = {}
+        text_x['reblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i in self.extractor.text_inds['reblog']])].long()
+        text_x['nonreblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i in self.extractor.text_inds['nonreblog']])].long()
+        text_x['reblog'] = self.embedding(text_x['reblog'])
+        text_x['nonreblog'] = self.embedding(text_x['nonreblog'])
+
+        text_feats = {'reblog': {}, 'nonreblog': {}}
+        for reblog_type in ['reblog', 'nonreblog']:
+            for kernel in self.kernel_sizes:
+                text_feats[reblog_type][kernel] = self.conv_block_text[kernel](
+                    text_x[reblog_type])
+
+        text_embs_list = sum([[text_feats['reblog'][kernel], 
+            text_feats['nonreblog'][kernel]] for kernel in self.kernel_sizes], [])
+        text_embs = torch.cat(text_embs_list, 2)
+        text_embs = text_embs.reshape(text_embs.size(0), -1)
+
+        # Graph features
+        graph_x = {}
+        graph_x['reblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i in self.extractor.graph_inds['reblog']])]
+        graph_x['nonreblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i in self.extractor.graph_inds['nonreblog']])]
+
+        graph_embs = torch.cat((graph_x['reblog'], graph_x['nonreblog']), 1)
+        #graph_embs = self.fc_graph(torch.FloatTensor(graph_embs.float()).to(self.device)) # cuda error for some reason
+        #graph_embs = torch.FloatTensor(graph_embs.float().to(self.device))
+
+        # Final classification layer
+        flattened = torch.cat((post_embs, x_add, text_embs, graph_embs), 1)
+        out = self.fc_block(flattened.float())
+        return out.squeeze()
+
+    def conv_block(self, seq_len, kernel):
+        return nn.Sequential(
+            nn.Conv1d(seq_len, self.out_size, kernel, self.stride),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel, self.stride)
+        )
+
+
+class CNNGraphClassifier(nn.Module):
+    """ 
+        CNN for post+graph features.
+        From https://github.com/FernandoLpz/Text-Classification-CNN-PyTorch/
+        blob/master/src/model/model.py 
+    """
+
+    def __init__(self, extractor, device):
+        """ Args:
+                extractor: FeatureExtractor, for the parameters
+        """
+
+        super().__init__()
+        self.extractor = extractor
+        self.device = device
+        self.clf_type = 'cnn'
+        self.name = 'model' + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+
+        # Parameters regarding text preprocessing
+        self.word_embs = self.extractor.word_embs
+        self.seq_len = self.extractor.padding_size
+        self.num_words = len(self.extractor.word_embs.wv.vocab)
+        self.embedding_size = self.extractor.word_embs.vector_size
+
+        # CNN parameters definition
+        # Kernel sizes
+        self.kernel_sizes = range(2,6)
+        # Output size for each convolution
+        self.out_size = 32
+        # Number of strides for each convolution
+        self.stride = 2
+        # Dropout
+        #self.dropout = 0.25
+        self.dropout = 0
+
+        ## Embedding layer definition
+        weights = torch.FloatTensor(self.word_embs.wv.vectors).to(device)
+        zeros = torch.zeros(1, self.embedding_size).to(device)
+        weights_with_padding = torch.cat((zeros, weights), 0).to(device)
+        self.embedding = nn.Embedding.from_pretrained(weights_with_padding,
+            padding_idx=0).to(device)
+
+        # Convolution layers definition (post)
+        self.conv_block_post = {}
+        for kernel in self.kernel_sizes:
+            self.conv_block_post[kernel] = self.conv_block(self.seq_len, kernel).to(self.device)
+
+        # Graph FFN layers
+        self.fc_graph = nn.Sequential(
+            nn.Linear(400, 128).to(self.device),
+            nn.ReLU().to(self.device),
+            nn.Linear(128, 32).to(self.device),
+            nn.ReLU().to(self.device),
+        ).to(self.device)
+
+        #self.fc_block = fc_block(4130, self.dropout) # for 1-layer FFN graph
+        self.fc_block = fc_block(3762, self.dropout) # for graph FFN block
+
+    def forward(self, x):
+        """ Called indirectly through model(input).
+            TODO: probably separate input x as arguments
+        """
+
+        # Post features
+        tag_feats = {}
+        tag_feats['reblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i not in self.extractor.nontext_inds and \
+            i in self.extractor.reblog_inds])].long()
+        tag_feats['nonreblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i not in self.extractor.nontext_inds and \
+            i not in self.extractor.graph_inds['reblog'] and \
+            i not in self.extractor.graph_inds['nonreblog'] and \
+            i not in self.extractor.reblog_inds])].long()
+        tag_feats['reblog'] = self.embedding(tag_feats['reblog'])
+        tag_feats['nonreblog'] = self.embedding(tag_feats['nonreblog'])
+        x_add = x[:,np.array(self.extractor.nontext_inds)].float()
+
+        post_feats = {'reblog': {}, 'nonreblog': {}}
+        for reblog_type in ['reblog', 'nonreblog']:
+            for kernel in self.kernel_sizes:
+                post_feats[reblog_type][kernel] = self.conv_block_post[kernel](
+                    tag_feats[reblog_type])
+
+        post_embs_list = sum([[post_feats['reblog'][kernel], 
+            post_feats['nonreblog'][kernel]] for kernel in self.kernel_sizes], [])
+        post_embs = torch.cat(post_embs_list, 2)
+        post_embs = post_embs.reshape(post_embs.size(0), -1)
+
+        # Graph features
+        graph_x = {}
+        graph_x['reblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i in self.extractor.graph_inds['reblog']])]
+        graph_x['nonreblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i in self.extractor.graph_inds['nonreblog']])]
+
+        graph_embs = torch.cat((graph_x['reblog'], graph_x['nonreblog']), 1)
+        graph_embs = self.fc_graph(graph_embs.float().to(self.device)) # cuda error for some reason
+
+        # Final classification layer
+        flattened = torch.cat((post_embs, x_add, graph_embs), 1)
+        out = self.fc_block(flattened.float())
+        return out.squeeze()
+
+    def conv_block(self, seq_len, kernel):
+        return nn.Sequential(
+            nn.Conv1d(seq_len, self.out_size, kernel, self.stride),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel, self.stride)
+        )
+
 class CNNTextClassifier(nn.Module):
-    """ From https://github.com/FernandoLpz/Text-Classification-CNN-PyTorch/
-        blob/master/src/model/model.py """
+    """ 
+        CNN for post+text features.
+        From https://github.com/FernandoLpz/Text-Classification-CNN-PyTorch/
+        blob/master/src/model/model.py 
+
+        TODO: think about combining or subclassing with post baseline CNN
+    """
+
+    def __init__(self, extractor, device):
+        """ Args:
+                extractor: FeatureExtractor, for the parameters
+        """
+
+        super().__init__()
+        self.extractor = extractor
+        self.device = device
+        self.clf_type = 'cnn'
+        self.name = 'model' + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M")
+
+        # Parameters regarding text preprocessing
+        self.word_embs = self.extractor.word_embs
+        self.seq_len = self.extractor.padding_size
+        self.num_words = len(self.extractor.word_embs.wv.vocab)
+        self.embedding_size = self.extractor.word_embs.vector_size
+
+        # CNN parameters definition
+        # Kernel sizes
+        self.kernel_sizes = range(2,6)
+        # Output size for each convolution
+        self.out_size = 32
+        # Number of strides for each convolution
+        self.stride = 2
+        # Dropout
+        #self.dropout = 0.25
+        self.dropout = 0
+
+        ## Embedding layer definition
+        weights = torch.FloatTensor(self.word_embs.wv.vectors).to(device)
+        zeros = torch.zeros(1, self.embedding_size).to(device)
+        weights_with_padding = torch.cat((zeros, weights), 0).to(device)
+        self.embedding = nn.Embedding.from_pretrained(weights_with_padding,
+            padding_idx=0).to(device)
+
+        # Convolution layers definition (post)
+        self.conv_block_post = {}
+        for kernel in self.kernel_sizes:
+            self.conv_block_post[kernel] = self.conv_block(self.seq_len, kernel).to(self.device)
+
+        # Convolution layers definition (text)
+        self.conv_block_text = {}
+        for kernel in self.kernel_sizes:
+            self.conv_block_text[kernel] = self.conv_block(self.seq_len*2, kernel).to(self.device)
+
+        self.fc_block = fc_block(7442, self.dropout)
+
+    def forward(self, x):
+        """ Called indirectly through model(input).
+            TODO: probably separate input x as arguments
+        """
+
+        # Post features
+        tag_feats = {}
+        tag_feats['reblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i not in self.extractor.nontext_inds and \
+            i in self.extractor.reblog_inds])].long()
+        tag_feats['nonreblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i not in self.extractor.nontext_inds and \
+            i not in self.extractor.text_inds['reblog'] and \
+            i not in self.extractor.text_inds['nonreblog'] and \
+            i not in self.extractor.reblog_inds])].long()
+        tag_feats['reblog'] = self.embedding(tag_feats['reblog'])
+        tag_feats['nonreblog'] = self.embedding(tag_feats['nonreblog'])
+        x_add = x[:,np.array(self.extractor.nontext_inds)].float()
+
+        post_feats = {'reblog': {}, 'nonreblog': {}}
+        for reblog_type in ['reblog', 'nonreblog']:
+            for kernel in self.kernel_sizes:
+                post_feats[reblog_type][kernel] = self.conv_block_post[kernel](
+                    tag_feats[reblog_type])
+
+        post_embs_list = sum([[post_feats['reblog'][kernel], 
+            post_feats['nonreblog'][kernel]] for kernel in self.kernel_sizes], [])
+        post_embs = torch.cat(post_embs_list, 2)
+        post_embs = post_embs.reshape(post_embs.size(0), -1)
+
+        # Blog description features
+        text_x = {}
+        text_x['reblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i in self.extractor.text_inds['reblog']])].long()
+        text_x['nonreblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
+            i in self.extractor.text_inds['nonreblog']])].long()
+        text_x['reblog'] = self.embedding(text_x['reblog'])
+        text_x['nonreblog'] = self.embedding(text_x['nonreblog'])
+
+        text_feats = {'reblog': {}, 'nonreblog': {}}
+        for reblog_type in ['reblog', 'nonreblog']:
+            for kernel in self.kernel_sizes:
+                text_feats[reblog_type][kernel] = self.conv_block_text[kernel](
+                    text_x[reblog_type])
+
+        text_embs_list = sum([[text_feats['reblog'][kernel], 
+            text_feats['nonreblog'][kernel]] for kernel in self.kernel_sizes], [])
+        text_embs = torch.cat(text_embs_list, 2)
+        text_embs = text_embs.reshape(text_embs.size(0), -1)
+
+        # Final classification layer
+        flattened = torch.cat((post_embs, x_add, text_embs), 1)
+        out = self.fc_block(flattened)
+        return out.squeeze()
+
+    def conv_block(self, seq_len, kernel):
+        return nn.Sequential(
+            nn.Conv1d(seq_len, self.out_size, kernel, self.stride),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel, self.stride)
+        )
+
+
+def fc_block(flattened_size, dropout):
+    return nn.Sequential(
+        nn.Linear(flattened_size, 1),
+        nn.Dropout(dropout),
+        nn.Sigmoid()
+    )
+
+
+class CNNPostClassifier(nn.Module):
+    """ 
+        CNN for post features.
+        From https://github.com/FernandoLpz/Text-Classification-CNN-PyTorch/
+        blob/master/src/model/model.py 
+    """
 
     def __init__(self, extractor, device):
         """ Args:
@@ -35,9 +413,6 @@ class CNNTextClassifier(nn.Module):
         self.seq_len = self.extractor.padding_size
         self.num_words = len(self.extractor.word_embs.wv.vocab)
         self.embedding_size = self.extractor.word_embs.vector_size
-
-        # Dropout definition
-        #self.dropout = nn.Dropout(0.25)
 
         # CNN parameters definition
         # Kernel sizes

@@ -17,7 +17,7 @@ from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 
 from ffn import FFNTextClassifier, FFNSimpleClassifier
-from cnn import CNNTextClassifier
+from cnn import CNNPostClassifier, CNNTextClassifier, CNNGraphClassifier, CNNTextGraphClassifier
 
 
 class RunPyTorch():
@@ -39,10 +39,18 @@ class RunPyTorch():
         self.debug = debug
         self.subset = 100 # for debugging
         self.clfs = {
-            'cnn': CNNTextClassifier,
             'ffn': FFNTextClassifier,
             'ffn_nontext': FFNSimpleClassifier
         }
+        if self.extractor.text_features:
+            if self.extractor.graph_features:
+                self.clfs['cnn'] = CNNTextGraphClassifier
+            else:
+                self.clfs['cnn'] = CNNTextClassifier
+        elif self.extractor.graph_features:
+            self.clfs['cnn'] = CNNGraphClassifier
+        else:
+            self.clfs['cnn'] = CNNPostClassifier
         self.use_cuda = use_cuda
         if self.use_cuda:
             device = torch.device("cuda")
@@ -104,15 +112,28 @@ class RunPyTorch():
         # Start training
         optimizer = self.run_params[self.clf_type]['optim']
         lossfunc = self.run_params[self.clf_type]['lossfunc']
+        best_devloss = 1000 # for early stopping
+        early_stopping_count = 0
         for epoch in range(self.epochs):
             if self.debug:
                 train_epoch(epoch, self.model, loader_train, loader_dev, 
                     optimizer, self.data.y_train[:self.subset], self.data.y_dev,
                     lossfunc)
             else:
-                train_epoch(epoch, self.model, loader_train, loader_dev, 
+                devloss = train_epoch(epoch, self.model, loader_train, loader_dev, 
                     optimizer, self.data.y_train, self.data.y_dev,
                     lossfunc)
+                if devloss < best_devloss:
+                    best_devloss = devloss
+                    early_stopping_count = 0
+                else:
+                    early_stopping_count += 1
+                    if early_stopping_count > 5:
+                        break
+
+        # Load saved model
+        #modelpath = '../models/cnnmodel2021-04-07_17-27.model'
+        #self.model.load_state_dict(torch.load(modelpath))
 
         # Test
         self.score = test_model(self.model, loader_test, self.data.y_test)
@@ -122,6 +143,12 @@ class RunPyTorch():
              + '.model')
         torch.save(self.model.state_dict(), outpath)
         print(f"Model saved to {outpath}")
+
+        # Save score
+        score_outpath = os.path.join('../output', self.clf_type + self.model.name \
+            + '_score.txt')
+        with open(score_outpath, 'w') as f:
+            f.write(str(self.score))
 
         return self.score
 
@@ -233,6 +260,8 @@ def train_epoch(epoch, model, loader_train, loader_dev, optimizer,
     with open(log_fpath, 'a') as f:
         f.write(','.join([timestamp, str(epoch+1), str(len(loader_train)), 
             str(train_avgloss), str(dev_avgloss)]) + '\n')
+
+    return dev_avgloss
 
     # Evaluation phase
     #dev_predictions = evaluation(model, loader_dev)
