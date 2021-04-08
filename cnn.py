@@ -68,13 +68,14 @@ class CNNTextGraphClassifier(nn.Module):
 
         # Graph FFN layers
         self.fc_graph = nn.Sequential(
-            nn.Linear(200, 128),
+            nn.Linear(400, 128),
             nn.ReLU(),
             nn.Linear(128, 32),
             nn.ReLU(),
         ).to(self.device)
 
-        self.fc_block = fc_block(7842, self.dropout)
+        #self.fc_block = fc_block(7842, self.dropout)
+        self.fc_block = fc_block(7474, self.dropout)
 
     def forward(self, x):
         """ Called indirectly through model(input).
@@ -134,10 +135,8 @@ class CNNTextGraphClassifier(nn.Module):
             i in self.extractor.graph_inds['reblog']])]
         graph_x['nonreblog'] = x[:,np.array([i for i in range(x.shape[1]) if \
             i in self.extractor.graph_inds['nonreblog']])]
-
         graph_embs = torch.cat((graph_x['reblog'], graph_x['nonreblog']), 1)
-        #graph_embs = self.fc_graph(torch.FloatTensor(graph_embs.float()).to(self.device)) # cuda error for some reason
-        #graph_embs = torch.FloatTensor(graph_embs.float().to(self.device))
+        graph_embs = self.fc_graph(graph_embs.float().to(self.device))
 
         # Final classification layer
         flattened = torch.cat((post_embs, x_add, text_embs, graph_embs), 1)
