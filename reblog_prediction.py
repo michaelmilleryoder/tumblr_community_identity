@@ -32,17 +32,25 @@ def get_args():
         help='lr svm ffn cnn',
         default='')
     parser.add_argument('--name', dest='model_name', 
-        help='model name base, automatically appends experiment features and classifier', default='')
+        help='model name base, automatically appends experiment features and classifier', 
+        default='')
     parser.add_argument('--features', dest='features', 
-        help='Which set of features to include, separated by commas. Options: {post,post_nontext,text,graph}. Default: post,text', default='post,text')
+        help='Which set of features to include, separated by commas. Options: '
+            '{post,post_nontext,text,graph,comms}. Default: post,text', default='post,text')
     parser.add_argument('--post-emb-type', dest='post_emb_type', 
-        help='Which pretrained word embedding model to use for posts'
-                'out of {posts, blog_desc, deepwalk}',
-        default='posts')
+        help='Which pretrained word embedding model, or ngrams, '
+            'to use for post hashtags '
+                'out of {posts, blog_desc, deepwalk, unigrams}',
+        default=None)
     parser.add_argument('--text-emb-type', dest='text_emb_type',
-        help='Which pretrained word embedding model to use for blog descriptions'
-                'out of {posts, blog_desc, deepwalk, fasttext, bert}',
-        default='blog_desc')
+        help='Which pretrained word embedding model, or ngrams, '
+            'to use for blog descriptions'
+                ' out of {posts, blog_desc, deepwalk, fasttext, bert, unigrams}',
+        default=None)
+    parser.add_argument('--feature-selection', dest='feature_selection_k',
+        help='How many features to select for ngram features',
+        type=int,
+        default=-1)
     parser.add_argument('--task', dest='task', 
         help='Which task to run out of {binary_classification, learning-to-rank}', 
         default='learning-to-rank')
@@ -61,7 +69,8 @@ def get_args():
         default=1)
     parser.add_argument('--cuda', dest='use_cuda', action='store_true', default=False,
         help='If using a PyTorch model, whether to use GPU')
-    parser.add_argument('--preprocessed', dest='load_preprocessed', help='path to external preprocessed blog descriptions; default None', default=None)
+    parser.add_argument('--preprocessed', dest='load_preprocessed', 
+        help='path to external preprocessed blog descriptions; default None', default=None)
     args = parser.parse_args()
     return args
 
@@ -73,32 +82,43 @@ def main():
         run_pkg = 'pytorch'
     else:
         run_pkg = 'sklearn'
+    if not args.text_emb_type:
+        emb_type_name = args.post_emb_type
+    else:
+        emb_type_name = args.text_emb_type
     exp_name = '_'.join([
             args.model_name,
             args.features.replace(',', '+'),
-            args.text_emb_type,
+            emb_type_name,
             args.classifier_type,
         ]).strip('_')
     exp_output_dirpath = os.path.join(args.output_dirpath, exp_name)
 
     # Load trained embedding models
-    print("Loading embeddings...")
-    emb_loader = EmbeddingLoader(args.post_emb_type, args.text_emb_type)
-    load_word_embs = True
-    load_graph_embs, graph_embs = False, None
-    load_sent_embs, sent_embs = False, None
-    if 'graph' in args.features:
-        load_graph_embs = True
-    if 'text' in args.features and args.text_emb_type in ['fasttext', 'bert']:
-        load_sent_embs = True
-    emb_loader.load(word_embs=load_word_embs, graph_embs=load_graph_embs,
-        sent_embs=load_sent_embs)
-    if load_graph_embs:
-        graph_embs = emb_loader.graph_embs
-    if load_sent_embs:
-        sent_embs = emb_loader.sent_embs
-    word_embs = emb_loader.word_embs
-
+    # TODO: Move the loading of things elsewhere
+    if args.text_emb_type == 'unigrams' and args.post_emb_type == 'unigrams':
+        word_embs = None
+        graph_embs = None
+        sent_embs = None
+    else:
+        print("Loading embeddings...")
+        emb_loader = EmbeddingLoader(args.post_emb_type, args.text_emb_type)
+        load_word_embs, load_graph_embs, graph_embs = False, False, None
+        load_sent_embs, sent_embs = False, None
+        if args.post_emb_type != 'unigrams':
+            load_word_embs = True
+        if 'graph' in args.features:
+            load_graph_embs = True
+        if 'text' in args.features and args.text_emb_type in ['fasttext', 'bert']:
+            load_sent_embs = True
+        emb_loader.load(word_embs=load_word_embs, graph_embs=load_graph_embs,
+            sent_embs=load_sent_embs)
+        if load_graph_embs:
+            graph_embs = emb_loader.graph_embs
+        if load_sent_embs:
+            sent_embs = emb_loader.sent_embs
+        word_embs = emb_loader.word_embs
+    
     # Load and filter dataset
     print("Loading and filtering data...")
     dataset = Dataset()
@@ -109,7 +129,12 @@ def main():
         dataset.filter(user_ids=user_filter, word_filter=word_embs.wv, 
             word_filter_min=args.word_filter_min, preprocessed_descs=id2token)
     else:
-        dataset.filter(word_filter=word_embs.wv, word_filter_min=args.word_filter_min)
+        if args.text_emb_type and args.post_emb_type and \
+            args.text_emb_type != 'unigrams' and args.post_emb_type != 'unigrams':
+            dataset.filter(word_filter=word_embs.wv, 
+                word_filter_min=args.word_filter_min)
+        elif 'comms' in args.features:
+            dataset.load_filter_communities()
 
     # Extract features
     print("Extracting features...")
@@ -119,8 +144,13 @@ def main():
             word_inds=True, padding_size=30)
         dataset = extractor.extract(dataset, dev=True)
     else:
+        if args.post_emb_type == 'unigrams' or args.text_emb_type == 'unigrams':
+            ngrams = True
+        else:
+            ngrams = False
         extractor = FeatureExtractor(args.features, word_embs=word_embs,
-            graph_embs=graph_embs, sent_embs=sent_embs)
+            graph_embs=graph_embs, sent_embs=sent_embs, ngrams=ngrams, 
+            select_k=args.feature_selection_k)
         dataset = extractor.extract(dataset)
 
     # Run model

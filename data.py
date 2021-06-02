@@ -143,6 +143,10 @@ class Dataset():
             if self.organization == 'binary_classification':
                 for col in user_cols:
                     data = data[data[col].isin(user_ids)]
+            else:
+                data = data.query('tumblog_id_follower == @user_ids and '
+                    'tumblog_id_followee_reblog == @user_ids and '
+                    'tumblog_id_followee_nonreblog == @user_ids')
 
         if preprocessed_descs:
             # Replace text with preprocessed text
@@ -167,6 +171,25 @@ class Dataset():
         self.data = data
         self.filter_settings = {'user_ids': user_ids is None,
                 'word_filter': word_filter is None}
+
+    def load_filter_communities(self):
+        """ Load community assignments, filter to just users with communities,
+            create columns with community assignments """
+        # Load communities
+        commpath = '/data/tumblr_community_identity/dataset114k/louvain_communities.txt'
+        comms = {}
+        with open(commpath) as f:
+            for i,line in enumerate(f.read().splitlines()):
+                comms[i+1] = [int(tumblog_id) for tumblog_id in line.split()]
+        user_ids = [tid for comm in comms.values() for tid in comm]
+        self.filter(user_ids=user_ids)
+        id2comm = {}
+        for n, comm in comms.items():
+            for tumblog_id in comm:
+                id2comm[tumblog_id] = n
+        for user in ['follower', 'followee_reblog', 'followee_nonreblog']:
+            self.data[f'community_{user}'] = self.data[f'tumblog_id_{user}'].map(
+                id2comm.get)
 
     def save_settings(self, output_dirpath):
         """ Save dataset settings """
