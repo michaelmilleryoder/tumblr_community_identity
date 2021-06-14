@@ -121,6 +121,8 @@ class Dataset():
         half_len = int(len(self.data)/2)
         np.random.seed(9)
         labels = [0]*half_len + [1]*half_len
+        while len(labels) < len(self.data):
+            labels += [0]
         np.random.shuffle(labels)
         self.data['label'] = labels
 

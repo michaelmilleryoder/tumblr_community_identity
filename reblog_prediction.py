@@ -51,10 +51,14 @@ def get_args():
         help='How many features to select for ngram features',
         type=int,
         default=-1)
+    parser.add_argument('--forward-feature-selection', dest='forward_feature_selection_k',
+        help='Select this number of ngram features with forward sequential feature selection',
+        type=int,
+        default=-1)
     parser.add_argument('--task', dest='task', 
         help='Which task to run out of {binary_classification, learning-to-rank}', 
         default='learning-to-rank')
-    parser.add_argument('--dataset-location', dest='data_location', 
+    parser.add_argument('--dataset', dest='data_location', 
         help='Path to the CSV of the dataset; default'
              '/data/tumblr_community_identity/dataset114k/matched_reblogs_nonreblogs_dataset114k.csv',
             default='/data/tumblr_community_identity/dataset114k/matched_reblogs_nonreblogs_dataset114k.csv')
@@ -75,6 +79,10 @@ def get_args():
     return args
 
 
+def load_embeddings():
+    pass
+
+
 def main():
     """ Load data, train and evaluate a model """
     args = get_args()
@@ -86,17 +94,17 @@ def main():
         emb_type_name = args.post_emb_type
     else:
         emb_type_name = args.text_emb_type
-    exp_name = '_'.join([
-            args.model_name,
-            args.features.replace(',', '+'),
-            emb_type_name,
-            args.classifier_type,
-        ]).strip('_')
+    name_parts = [args.model_name, args.features.replace(',', '+'),
+                    emb_type_name, args.classifier_type]
+    name_parts = [n for n in name_parts if n is not None]
+    exp_name = '_'.join(name_parts).strip('_')
     exp_output_dirpath = os.path.join(args.output_dirpath, exp_name)
+    model_outpath = f'/projects/tumblr_community_identity/models/{exp_name}.pkl'
 
     # Load trained embedding models
-    # TODO: Move the loading of things elsewhere
-    if args.text_emb_type == 'unigrams' and args.post_emb_type == 'unigrams':
+    # TODO: Move the loading of things elsewhere (load_embeddings)
+    if (args.text_emb_type == 'unigrams' or args.text_emb_type is None) and \
+        (args.post_emb_type == 'unigrams' or args.post_emb_type is None):
         word_embs = None
         graph_embs = None
         sent_embs = None
@@ -138,34 +146,38 @@ def main():
 
     # Extract features
     print("Extracting features...")
+    post_ngrams, text_ngrams = False, False
     if run_pkg == 'pytorch':
         extractor = FeatureExtractor(args.features, word_embs=word_embs,
             graph_embs=graph_embs, sent_embs=sent_embs, 
             word_inds=True, padding_size=30)
-        dataset = extractor.extract(dataset, dev=True)
+        dataset = extractor.extract(dataset, run_pkg, dev=True)
     else:
-        if args.post_emb_type == 'unigrams' or args.text_emb_type == 'unigrams':
-            ngrams = True
-        else:
-            ngrams = False
+        if args.post_emb_type == 'unigrams':
+            post_ngrams = True
+        if args.text_emb_type == 'unigrams':
+            text_ngrams = True
         extractor = FeatureExtractor(args.features, word_embs=word_embs,
-            graph_embs=graph_embs, sent_embs=sent_embs, ngrams=ngrams, 
-            select_k=args.feature_selection_k)
-        dataset = extractor.extract(dataset)
+            graph_embs=graph_embs, sent_embs=sent_embs, post_ngrams=post_ngrams, 
+            text_ngrams=text_ngrams, select_k=args.feature_selection_k)
+        dataset = extractor.extract(dataset, run_pkg, dev=True)
 
     # Run model
     print("Running model...")
     experiment = Experiment(extractor, dataset, args.classifier_type, args.use_cuda,
-         args.epochs)
+         args.epochs, sfs_k=args.forward_feature_selection_k)
     experiment.run()
 
     # Print output
-    print(f'\tScore: {experiment.score: .4f}')
+    if experiment.dev_score:
+        print(f'\tDev set score: {experiment.dev_score: .4f}')
+    print(f'\tTest set score: {experiment.test_score: .4f}')
 
     # Save settings, output
     if run_pkg == 'sklearn':
         dataset.save_settings(exp_output_dirpath)
         experiment.save_output(exp_output_dirpath)
+        experiment.save_model(model_outpath)
 
 
 if __name__ == '__main__':

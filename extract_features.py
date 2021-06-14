@@ -39,7 +39,7 @@ def rank_feature_transform(reblog_feats_list, nonreblog_feats_list, labels,
     comparison_feats = []
     for reblog_feats, nonreblog_feats, label in zip(
         reblog_feats_list, nonreblog_feats_list, labels):
-        if label == 0:
+        if label == 1:
             if combo == 'subtract':
                 comparison_feats.append(reblog_feats - nonreblog_feats)
             elif combo == 'concat':
@@ -58,7 +58,8 @@ class FeatureExtractor():
     """ Extract features """
 
     def __init__(self, feature_str, word_embs=None, graph_embs=None, sent_embs=None,
-            word_inds=False, padding_size=-1, ngrams=False, select_k=1000):
+            word_inds=False, padding_size=-1, post_ngrams=False, text_ngrams=False,
+            select_k=1000):
         """ Args:
                 feature_str: comma-separated list of feature sets to be included 
                     (post, text, etc)
@@ -74,7 +75,9 @@ class FeatureExtractor():
                 padding_size: Size of padding for variable-length text features,
                     to be used when word_inds is True.
                     If -1 (default), don't do padding.
-                ngrams: True to extract ngram features
+                post_ngrams: True to extract ngram features for post hashtags
+                text_ngrams: True to extract ngram features for blog description text
+                    hashtags
         """
         features = feature_str.split(',')
         self.post_features, self.user_features = False, False
@@ -104,16 +107,18 @@ class FeatureExtractor():
         self.reblog_inds = None # reblog feature vector indices, for PyTorch
         self.text_inds = {} # text blog desc feature vector indices, for PyTorch
         self.graph_inds = {} # graph blog desc feature vector indices, for PyTorch
-        self.ngrams = ngrams
+        self.post_ngrams = post_ngrams
+        self.text_ngrams = text_ngrams
         self.select_k = select_k
 
-    def extract(self, dataset, dev=False):
+    def extract(self, dataset, run_pkg, dev=False):
         """ Takes a Dataset and extracts features.
             Returns a Dataset with extracted features in
                     dataset.X_train, dataset.y_train,
                     dataset.X_test, dataset.y_test
             Args:
                 dataset: Dataset
+                run_pkg: {'pytorch', 'sklearn'}
                 dev: Whether to split to include a dev set.
                     If False, will just split into training
                     and test.
@@ -157,12 +162,14 @@ class FeatureExtractor():
 
         # Split into train and test sets
         X_train, X_test, y_train, y_test = train_test_split(
-            features, y, test_size=.1, random_state=9)
-        if dev: # PyTorch
+            features, y, test_size=.2, random_state=9)
+            #features, y, test_size=.1, random_state=9)
+        if dev:
             X_train, X_dev, y_train, y_dev = train_test_split(
                 X_train, y_train, test_size=len(y_test), random_state=9)
             dataset.set_folds(X_train, X_test, y_train, y_test,
                 X_dev=X_dev, y_dev=y_dev)
+        if run_pkg == 'pytorch':
             dataset.scale_nontext_features(self.nontext_inds)
 
         else: # sklearn
@@ -172,20 +179,30 @@ class FeatureExtractor():
                 scaler = StandardScaler(with_mean=True)
             X_train = scaler.fit_transform(X_train)
             X_test = scaler.transform(X_test)
+            if dev:
+                X_dev = scaler.transform(X_dev)
 
-            # Feature selection
+            # Feature selection (normal, based on ANOVA F-measure)
             if self.select_k > 0 and self.select_k < X_train.shape[1]:
                 print("\tRunning feature extraction...")
                 selector = SelectKBest(f_classif, k=self.select_k).fit(X_train, y_train)
-                #selector = SelectKBest(mutual_info_classif, k=self.select_k).fit(
-                    #X_train, y_train)
+                # Save selected feature indices
+                np.savetxt('/projects/tumblr_community_identity/tmp/500selected_feats.txt', 
+                    selector.get_support())
                 X_train = selector.transform(X_train)
+                X_dev = selector.transform(X_dev)
                 X_test = selector.transform(X_test)
 
-            dataset.set_folds(X_train, X_test, y_train, y_test)
+            if dev:
+                dataset.set_folds(X_train, X_test, y_train, y_test,
+                    X_dev=X_dev, y_dev=y_dev)
+            else:
+                dataset.set_folds(X_train, X_test, y_train, y_test)
         print("\tTotal dataset shape (#instances, #features): "
             f"{X_train.shape[0] + X_test.shape[0], X_train.shape[1]}")
         print(f"\tTraining set shape: {X_train.shape}")
+        if dev:
+            print(f"\tDev set shape: {X_dev.shape}")
         print(f"\tTest set shape: {X_test.shape}")
         return dataset
 
@@ -214,7 +231,7 @@ class FeatureExtractor():
             # Post type
             feature_parts['post_type'] = self.extract_post_type_features(data, combo)
 
-            if self.ngrams:
+            if self.post_ngrams:
                 feature_parts['post_tag_emb'] = scipy.sparse.vstack(feature_parts[
                     'post_tag_emb'])
                 post_features = scipy.sparse.hstack(list(feature_parts.values()))
@@ -263,12 +280,22 @@ class FeatureExtractor():
     def extract_post_tag_features(self, data, combo):
         """ Extract post hashtag features """
         feature_opts = {} # reblog and nonreblog
-        if self.ngrams: # Initialize vectorizers
+        if self.post_ngrams: # Initialize vectorizers
             data_train, data_test = train_test_split(data, test_size=.1, random_state=9)
             corpus = data_train['post_tags_nonreblog'].dropna().tolist() + data_train[
                 'post_tags_reblog'].dropna().tolist()
             vec = CountVectorizer(min_df=5)
             vec.fit(corpus)
+
+        # Save vectorizer indices
+        with open('/projects/tumblr_community_identity/tmp/post_tag_names.txt', 'w') as f:
+            for name in vec.get_feature_names():
+                f.write(name + '\n')
+        print("Wrote features")
+        # Save vectorizer
+        with open('/projects/tumblr_community_identity/tmp/post_tag_names_vec.pkl', 'wb') as f:
+            pickle.dump(vec, f)
+        print("Wrote post tag vectorizer")
 
         print("\tPost hashtag features...")
         for reblog_type in ['reblog', 'nonreblog']:
@@ -276,7 +303,7 @@ class FeatureExtractor():
                 fn = self.get_word_inds
                 params = None
                 self.build_vocab()
-            elif not self.ngrams:
+            elif not self.post_ngrams:
                 fn = self.word_embeddings
                 params = None
             else:
@@ -316,7 +343,7 @@ class FeatureExtractor():
         """
         parts = {} # to assemble in the end
         # Get separate embeddings
-        if self.ngrams: # Get aligned ngrams
+        if self.text_ngrams: # Get aligned ngrams
             # Build vectorizer
             data_train, data_test = train_test_split(data, test_size=.1, 
                 random_state=9)
@@ -377,7 +404,7 @@ class FeatureExtractor():
                         ncols=70)])
         
         # Combine embeddings
-        if self.ngrams:
+        if self.text_ngrams:
             combo = 'subtract'
         else:
             for reblog_type in ['reblog', 'nonreblog']:
@@ -516,10 +543,15 @@ class FeatureExtractor():
 
         if self.comm_features:
             comm_features = self.extract_comm_features(data, organization)
+            #comm_features = self.simple_comm_features(data, organization)
             if user_embeddings is None:
                 user_embeddings = comm_features
             else:
-                user_embeddings = np.hstack([user_embeddings, comm_features])
+                if scipy.sparse.issparse(user_embeddings):
+                    user_embeddings = scipy.sparse.hstack([user_embeddings, 
+                        comm_features])
+                else:
+                    user_embeddings = np.hstack([user_embeddings, comm_features])
     
         return user_embeddings
 
@@ -530,7 +562,7 @@ class FeatureExtractor():
         # Learn which community interaction features are possible in training set
         data_train, data_test = train_test_split(data, test_size=.1, random_state=9)
         train_interactions = sum([[{'community_interaction': 
-                    f'follower{follower_comm},followee{followee_comm}'} for \
+                    f'follower={follower_comm},followee={followee_comm}'} for \
                 follower_comm, followee_comm in zip(
                 data_train['community_follower'], 
                 data_train[f'community_followee_{user_type}'])] for user_type in [
@@ -541,25 +573,34 @@ class FeatureExtractor():
         # Extract features
         for user_type in ['reblog', 'nonreblog']:
             # Community matches
-            comm_matches = data['community_follower'] == data[
-                f'community_followee_{user_type}']
+            comm_matches = (data['community_follower'] == data[
+                f'community_followee_{user_type}']).values.astype(int) # just 1 features
 
             # Individual community features
-            comm_interactions = [
-                {'community_interaction': 
-                    f'follower={follower_comm},followee={followee_comm}'} for \
-                follower_comm, followee_comm in zip(data[
-                'community_follower'], data[f'community_followee_{user_type}'])
-            ]
-            interaction_feats = vec.transform(comm_interactions)
+            #comm_interactions = [
+            #    {'community_interaction': 
+            #        f'follower={follower_comm},followee={followee_comm}'} for \
+            #    follower_comm, followee_comm in zip(data[
+            #    'community_follower'], data[f'community_followee_{user_type}'])
+            #]
+            #interaction_feats = vec.transform(comm_interactions)
 
-            parts[user_type] = np.hstack([interaction_feats, 
-                comm_matches.values.reshape(-1,1)])
+            #parts[user_type] = np.hstack([interaction_feats, 
+            #    comm_matches.values.reshape(-1,1)])
+            parts[user_type] = comm_matches.reshape(-1,1)
 
         feats = rank_feature_transform(
-            parts['reblog'], parts['nonreblog'], data.label, combo='subtract')
+            parts['reblog'], parts['nonreblog'], data.label, combo='concat')
 
+        # Add feature for followees not matching
+        feats = np.hstack([feats, (data['community_followee_reblog'] == data[
+            'community_followee_nonreblog']).values.astype(int).reshape(-1,1)])
         return feats
+
+    def simple_comm_features(self, data, organization):
+        """ Extract simple community features for follower, followee (no alignment) """
+        follower_comms = pd.get_dummies(data['community_follower'])
+        return follower_comms
 
     def sent_embeddings(self, tumblog_id):
         """ Looks up loaded blog description embedding for a given tumblog_id
