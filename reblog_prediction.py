@@ -75,6 +75,10 @@ def get_args():
         help='If using a PyTorch model, whether to use GPU')
     parser.add_argument('--preprocessed', dest='load_preprocessed', 
         help='path to external preprocessed blog descriptions; default None', default=None)
+    parser.add_argument('--post-tag-pca', dest='post_tag_pca',
+        help='How many features to reduce post hashtags to',
+        type=int,
+        default=None)
     args = parser.parse_args()
     return args
 
@@ -159,7 +163,8 @@ def main():
             text_ngrams = True
         extractor = FeatureExtractor(args.features, word_embs=word_embs,
             graph_embs=graph_embs, sent_embs=sent_embs, post_ngrams=post_ngrams, 
-            text_ngrams=text_ngrams, select_k=args.feature_selection_k)
+            text_ngrams=text_ngrams, select_k=args.feature_selection_k, 
+            post_tag_pca=args.post_tag_pca)
         dataset = extractor.extract(dataset, run_pkg, dev=True)
 
     # Run model

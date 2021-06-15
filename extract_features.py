@@ -21,6 +21,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_selection import SelectKBest, chi2, f_classif, mutual_info_classif
+from sklearn.decomposition import TruncatedSVD
 import scipy.sparse
 import numpy as np
 import pandas as pd
@@ -59,7 +60,7 @@ class FeatureExtractor():
 
     def __init__(self, feature_str, word_embs=None, graph_embs=None, sent_embs=None,
             word_inds=False, padding_size=-1, post_ngrams=False, text_ngrams=False,
-            select_k=1000):
+            select_k=1000, post_tag_pca=None):
         """ Args:
                 feature_str: comma-separated list of feature sets to be included 
                     (post, text, etc)
@@ -78,6 +79,8 @@ class FeatureExtractor():
                 post_ngrams: True to extract ngram features for post hashtags
                 text_ngrams: True to extract ngram features for blog description text
                     hashtags
+                select_k: Number of features to select with ANOVA f-measure
+                post_tag_pca: Number of features to run PCA with
         """
         features = feature_str.split(',')
         self.post_features, self.user_features = False, False
@@ -110,6 +113,7 @@ class FeatureExtractor():
         self.post_ngrams = post_ngrams
         self.text_ngrams = text_ngrams
         self.select_k = select_k
+        self.pca = post_tag_pca
 
     def extract(self, dataset, run_pkg, dev=False):
         """ Takes a Dataset and extracts features.
@@ -231,7 +235,7 @@ class FeatureExtractor():
             # Post type
             feature_parts['post_type'] = self.extract_post_type_features(data, combo)
 
-            if self.post_ngrams:
+            if self.post_ngrams and not self.pca:
                 feature_parts['post_tag_emb'] = scipy.sparse.vstack(feature_parts[
                     'post_tag_emb'])
                 post_features = scipy.sparse.hstack(list(feature_parts.values()))
@@ -278,13 +282,17 @@ class FeatureExtractor():
         return post_features
 
     def extract_post_tag_features(self, data, combo):
-        """ Extract post hashtag features """
+        """ Extract post hashtag features.
+        """
         feature_opts = {} # reblog and nonreblog
         if self.post_ngrams: # Initialize vectorizers
-            data_train, data_test = train_test_split(data, test_size=.1, random_state=9)
+            data_train, data_test = train_test_split(data, test_size=.1, 
+                random_state=9)
             corpus = data_train['post_tags_nonreblog'].dropna().tolist() + data_train[
                 'post_tags_reblog'].dropna().tolist()
-            vec = CountVectorizer(min_df=5)
+            stops = ['the', 'and', 'to', 'this', 'that', 'it', 'is', 'of', 'on', 
+                'in', 'for', 'but']
+            vec = CountVectorizer(min_df=5, stop_words=stops)
             vec.fit(corpus)
 
         # Save vectorizer indices
@@ -297,6 +305,18 @@ class FeatureExtractor():
             pickle.dump(vec, f)
         print("Wrote post tag vectorizer")
 
+        if self.pca is not None:
+            ("Fitting SVD to post hashtag features...")
+            corpus = scipy.sparse.vstack([vec.transform(
+                data_train['post_tags_reblog'].map(utils.string_list2str)), 
+                vec.transform(data_train['post_tags_nonreblog'].map(
+                    utils.string_list2str))])
+            svd = TruncatedSVD(self.pca).fit(corpus)
+            # Save PCA
+            with open(f'/projects/tumblr_community_identity/tmp/post_tag_pca{self.pca}.pkl', 'wb') as f:
+                pickle.dump(svd, f)
+            print("Wrote PCA")
+
         print("\tPost hashtag features...")
         for reblog_type in ['reblog', 'nonreblog']:
             if self.word_inds: # for PyTorch
@@ -308,12 +328,17 @@ class FeatureExtractor():
                 params = None
             else:
                 fn = self.get_ngrams
-                params = vec
+                if self.pca is not None:
+                    params = [vec, svd]
+                else:
+                    params = [vec]
             feature_opts[reblog_type] = np.array([fn(
-                    utils.string_list2str(tags), params) for tags in tqdm(
+                    utils.string_list2str(tags), *params) for tags in tqdm(
                     data[f'post_tags_{reblog_type}'], ncols=70)])
         res = rank_feature_transform(feature_opts['reblog'], 
             feature_opts['nonreblog'], data.label, combo=combo)
+        if res.ndim == 3:
+            res = res.squeeze()
         return res
 
     def extract_note_features(self, data, combo):
@@ -322,7 +347,8 @@ class FeatureExtractor():
         for reblog_type in ['reblog', 'nonreblog']:
             feature_opts[reblog_type] = data[
                 f'post_note_count_{reblog_type}'].fillna(0).values
-        feats = rank_feature_transform(feature_opts['reblog'], feature_opts['nonreblog'], 
+        feats = rank_feature_transform(feature_opts['reblog'], 
+            feature_opts['nonreblog'], 
             data.label, combo=combo)
         if not self.word_inds: # sklearn
             feats = feats.reshape(-1,1)
@@ -334,7 +360,9 @@ class FeatureExtractor():
         for reblog_type in ['reblog', 'nonreblog']:
             feature_opts[reblog_type] = pd.get_dummies(
                 data[f'post_type_{reblog_type}']).values
-        return rank_feature_transform(feature_opts['reblog'], feature_opts['nonreblog'], 
+            # order is answer, audio, chat, link, photo, quote, text, video
+        return rank_feature_transform(feature_opts['reblog'], 
+            feature_opts['nonreblog'], 
             data.label, combo=combo)
 
     def text_embeddings_ltr(self, data):
@@ -626,10 +654,17 @@ class FeatureExtractor():
                 return_arr = np.mean(embeddings, axis=0)
         return return_arr
 
-    def get_ngrams(self, text, vec):
+    def get_ngrams(self, text, vec, pca=None):
         """ Returns an ngram representation for a given text, which has
-            space-separated tokens. """
-        return vec.transform([text])
+            space-separated tokens. 
+            Args:
+                vec: feature vectorizer
+                pca: Trained dimensionality reduction transformer
+        """
+        res = vec.transform([text])
+        if pca:
+            res = pca.transform(res)
+        return res
 
     def aligned_ngrams(self, follower_text, followee_text):
         """ Returns pairs of aligned unigrams from follower and followee,
@@ -637,7 +672,7 @@ class FeatureExtractor():
         result = []
         assert isinstance(follower_text, str) and isinstance(followee_text, str)
         stops = ['the', 'a', 'an', 'in', 'of', 'if', 'that', 'these', 'by',
-                    'those']
+                    'those', 'was']
         follower_toks = [tok for tok in follower_text.split() if tok not in stops]
         followee_toks = [tok for tok in followee_text.split() if tok not in stops]
         for follower_term, followee_term in itertools.product(follower_toks,

@@ -78,6 +78,7 @@ class Experiment():
             outpath = os.path.join('/projects/tumblr_community_identity/tmp/', 
                 f'sfs{self.sfs_k}_{self.extractor.select_k}.txt')
             np.savetxt(outpath, sfs.get_support())
+            print(f"Saved forward feature selection mask to {outpath}")
             sfs_mask = sfs.get_support()
             #sfs_mask = np.loadtxt(
             #    '/projects/tumblr_community_identity/tmp/sfs20_500.txt').astype(bool)
