@@ -36,7 +36,8 @@ def get_args():
         default='')
     parser.add_argument('--features', dest='features', 
         help='Which set of features to include, separated by commas. Options: '
-            '{post,post_nontext,text,graph,comms}. Default: post,text', default='post,text')
+            '{post,post_nontext,post_tags,text,graph,comms}. Default: post,text', 
+        default='post,text')
     parser.add_argument('--post-emb-type', dest='post_emb_type', 
         help='Which pretrained word embedding model, or ngrams, '
             'to use for post hashtags '
@@ -169,6 +170,9 @@ def main():
 
     # Run model
     print("Running model...")
+    data_outpath = f'../tmp/{exp_name}_data.pkl'
+    dataset.save_folds(data_outpath)
+    print(f"\tSaved dataset folds to {data_outpath}")
     experiment = Experiment(extractor, dataset, args.classifier_type, args.use_cuda,
          args.epochs, sfs_k=args.forward_feature_selection_k)
     experiment.run()

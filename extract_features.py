@@ -85,12 +85,15 @@ class FeatureExtractor():
         features = feature_str.split(',')
         self.post_features, self.user_features = False, False
         self.post_nontext_only = False
+        self.post_text_only = False
         self.text_features, self.graph_features, self.comm_features = (False, False, 
             False)
-        if 'post' in features or 'post_nontext' in features:
+        if 'post' in features or 'post_nontext' in features or 'post_tags' in features:
             self.post_features = True
             if 'post_nontext' in features: # no hashtags
                 self.post_nontext_only = True
+            if 'post_tags' in features: # only hashtags
+                self.post_text_only = True
         if 'text' in features:
             self.user_features = True
             self.text_features = True
@@ -229,11 +232,14 @@ class FeatureExtractor():
                 feature_parts['post_tag_emb'] = self.extract_post_tag_features(
                     data, combo)
 
-            # Post notes
-            feature_parts['post_note_count'] = self.extract_note_features(data, combo)
+            if not self.post_text_only:
+                # Post notes
+                feature_parts['post_note_count'] = self.extract_note_features(
+                    data, combo)
 
-            # Post type
-            feature_parts['post_type'] = self.extract_post_type_features(data, combo)
+                # Post type
+                #feature_parts['post_type'] = self.extract_post_type_features(
+                #    data, combo)
 
             if self.post_ngrams and not self.pca:
                 feature_parts['post_tag_emb'] = scipy.sparse.vstack(feature_parts[
@@ -588,21 +594,21 @@ class FeatureExtractor():
         parts = {}
 
         # Learn which community interaction features are possible in training set
-        data_train, data_test = train_test_split(data, test_size=.1, random_state=9)
-        train_interactions = sum([[{'community_interaction': 
-                    f'follower={follower_comm},followee={followee_comm}'} for \
-                follower_comm, followee_comm in zip(
-                data_train['community_follower'], 
-                data_train[f'community_followee_{user_type}'])] for user_type in [
-                'reblog', 'nonreblog']], [])
-        vec = DictVectorizer(sparse=False)
-        vec.fit(train_interactions)
+        #data_train, data_test = train_test_split(data, test_size=.1, random_state=9)
+        #train_interactions = sum([[{'community_interaction': 
+        #            f'follower={follower_comm},followee={followee_comm}'} for \
+        #        follower_comm, followee_comm in zip(
+        #        data_train['community_follower'], 
+        #        data_train[f'community_followee_{user_type}'])] for user_type in [
+        #        'reblog', 'nonreblog']], [])
+        #vec = DictVectorizer(sparse=False)
+        #vec.fit(train_interactions)
 
         # Extract features
         for user_type in ['reblog', 'nonreblog']:
             # Community matches
             comm_matches = (data['community_follower'] == data[
-                f'community_followee_{user_type}']).values.astype(int) # just 1 features
+                f'community_followee_{user_type}']).values.astype(int)
 
             # Individual community features
             #comm_interactions = [
@@ -618,11 +624,11 @@ class FeatureExtractor():
             parts[user_type] = comm_matches.reshape(-1,1)
 
         feats = rank_feature_transform(
-            parts['reblog'], parts['nonreblog'], data.label, combo='concat')
+            parts['reblog'], parts['nonreblog'], data.label, combo='subtract')
 
         # Add feature for followees not matching
-        feats = np.hstack([feats, (data['community_followee_reblog'] == data[
-            'community_followee_nonreblog']).values.astype(int).reshape(-1,1)])
+        #feats = np.hstack([feats, (data['community_followee_reblog'] == data[
+        #    'community_followee_nonreblog']).values.astype(int).reshape(-1,1)])
         return feats
 
     def simple_comm_features(self, data, organization):

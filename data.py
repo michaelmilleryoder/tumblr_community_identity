@@ -6,6 +6,7 @@ Load and filter data for reblog prediction experiments.
 """
 import os
 import pdb
+import pickle
 
 import numpy as np
 import pandas as pd
@@ -232,3 +233,13 @@ class Dataset():
             self.X_test[:, before_inds],
             X_test_add_scaled,
             self.X_test[:, after_inds]])
+
+    def save_folds(self, outpath):
+        """ Save experimental folds """
+        with open(outpath, 'wb') as f:
+            if self.X_dev is not None:
+                pickle.dump((self.X_train, self.y_train, self.X_dev, self.y_dev,
+                    self.X_test, self.y_test), f)
+            else:
+                pickle.dump((self.X_train, self.y_train,
+                    self.X_test, self.y_test), f)
