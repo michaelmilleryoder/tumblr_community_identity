@@ -41,7 +41,7 @@ def get_args():
     parser.add_argument('--post-emb-type', dest='post_emb_type', 
         help='Which pretrained word embedding model, or ngrams, '
             'to use for post hashtags '
-                'out of {posts, blog_desc, deepwalk, unigrams}',
+                'out of {posts, blog_desc, deepwalk, unigrams, tags}',
         default=None)
     parser.add_argument('--text-emb-type', dest='text_emb_type',
         help='Which pretrained word embedding model, or ngrams, '
@@ -80,6 +80,10 @@ def get_args():
         help='How many features to reduce post hashtags to',
         type=int,
         default=None)
+    parser.add_argument('--post-tag-lda', dest='post_tag_lda',
+        help='How many topics to reduce post hashtags to',
+        type=int,
+        default=None)
     args = parser.parse_args()
     return args
 
@@ -109,7 +113,8 @@ def main():
     # Load trained embedding models
     # TODO: Move the loading of things elsewhere (load_embeddings)
     if (args.text_emb_type == 'unigrams' or args.text_emb_type is None) and \
-        (args.post_emb_type == 'unigrams' or args.post_emb_type is None):
+        (args.post_emb_type == 'unigrams' or args.post_emb_type == 'tags' or \
+        args.post_emb_type is None):
         word_embs = None
         graph_embs = None
         sent_embs = None
@@ -151,7 +156,7 @@ def main():
 
     # Extract features
     print("Extracting features...")
-    post_ngrams, text_ngrams = False, False
+    post_ngrams, post_tags, text_ngrams = False, False, False
     if run_pkg == 'pytorch':
         extractor = FeatureExtractor(args.features, word_embs=word_embs,
             graph_embs=graph_embs, sent_embs=sent_embs, 
@@ -160,12 +165,15 @@ def main():
     else:
         if args.post_emb_type == 'unigrams':
             post_ngrams = True
+        elif args.post_emb_type == 'tags':
+            post_tags = True
         if args.text_emb_type == 'unigrams':
             text_ngrams = True
         extractor = FeatureExtractor(args.features, word_embs=word_embs,
             graph_embs=graph_embs, sent_embs=sent_embs, post_ngrams=post_ngrams, 
-            text_ngrams=text_ngrams, select_k=args.feature_selection_k, 
-            post_tag_pca=args.post_tag_pca)
+            post_tags=post_tags, text_ngrams=text_ngrams, 
+            select_k=args.feature_selection_k, 
+            post_tag_pca=args.post_tag_pca, post_tag_lda=args.post_tag_lda)
         dataset = extractor.extract(dataset, run_pkg, dev=True)
 
     # Run model

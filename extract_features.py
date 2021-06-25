@@ -21,11 +21,16 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.feature_selection import SelectKBest, chi2, f_classif, mutual_info_classif
-from sklearn.decomposition import TruncatedSVD
+from sklearn.decomposition import TruncatedSVD, LatentDirichletAllocation
 import scipy.sparse
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from gensim.models.ldamodel import LdaModel
+from gensim.models.ldamulticore import LdaMulticore
+from gensim.matutils import Sparse2Corpus
+from gensim.matutils import corpus2dense
+from gensim.matutils import corpus2csc
 
 import utils
 
@@ -59,8 +64,8 @@ class FeatureExtractor():
     """ Extract features """
 
     def __init__(self, feature_str, word_embs=None, graph_embs=None, sent_embs=None,
-            word_inds=False, padding_size=-1, post_ngrams=False, text_ngrams=False,
-            select_k=1000, post_tag_pca=None):
+            word_inds=False, padding_size=-1, post_ngrams=False, post_tags=False, 
+            text_ngrams=False, select_k=1000, post_tag_pca=None, post_tag_lda=None):
         """ Args:
                 feature_str: comma-separated list of feature sets to be included 
                     (post, text, etc)
@@ -80,7 +85,8 @@ class FeatureExtractor():
                 text_ngrams: True to extract ngram features for blog description text
                     hashtags
                 select_k: Number of features to select with ANOVA f-measure
-                post_tag_pca: Number of features to run PCA with
+                post_tag_pca: Number of features to run PCA with over post hashtags
+                post_tag_lda: Number of topics to run LDA with over post hashtags
         """
         features = feature_str.split(',')
         self.post_features, self.user_features = False, False
@@ -114,9 +120,11 @@ class FeatureExtractor():
         self.text_inds = {} # text blog desc feature vector indices, for PyTorch
         self.graph_inds = {} # graph blog desc feature vector indices, for PyTorch
         self.post_ngrams = post_ngrams
+        self.post_tags = post_tags
         self.text_ngrams = text_ngrams
         self.select_k = select_k
         self.pca = post_tag_pca
+        self.lda = post_tag_lda
 
     def extract(self, dataset, run_pkg, dev=False):
         """ Takes a Dataset and extracts features.
@@ -241,7 +249,7 @@ class FeatureExtractor():
                 #feature_parts['post_type'] = self.extract_post_type_features(
                 #    data, combo)
 
-            if self.post_ngrams and not self.pca:
+            if self.post_ngrams and not self.pca and not self.lda:
                 feature_parts['post_tag_emb'] = scipy.sparse.vstack(feature_parts[
                     'post_tag_emb'])
                 post_features = scipy.sparse.hstack(list(feature_parts.values()))
@@ -298,7 +306,21 @@ class FeatureExtractor():
                 'post_tags_reblog'].dropna().tolist()
             stops = ['the', 'and', 'to', 'this', 'that', 'it', 'is', 'of', 'on', 
                 'in', 'for', 'but']
-            vec = CountVectorizer(min_df=5, stop_words=stops)
+            vec = CountVectorizer(min_df=10, stop_words=stops)
+            vec.fit(corpus)
+
+        elif self.post_tags:
+            data_train, data_test = train_test_split(data, test_size=.2, 
+                random_state=9)
+            data_train, data_dev = train_test_split(data_train, 
+                test_size=len(data_test), random_state=9)
+            corpus = data_train['post_tags_nonreblog'].dropna().tolist() + data_train[
+                'post_tags_reblog'].dropna().tolist()
+            corpus = [utils.strlist2underscore(c) for c in corpus]
+            stops = ['the', 'and', 'to', 'this', 'that', 'it', 'is', 'of', 'on', 
+                'in', 'for', 'but']
+            vec = CountVectorizer(min_df=10, stop_words=stops, 
+                token_pattern=r'[^ ]+')
             vec.fit(corpus)
 
         # Save vectorizer indices
@@ -306,6 +328,7 @@ class FeatureExtractor():
             for name in vec.get_feature_names():
                 f.write(name + '\n')
         print("Wrote features")
+
         # Save vectorizer
         with open('/projects/tumblr_community_identity/tmp/post_tag_names_vec.pkl', 'wb') as f:
             pickle.dump(vec, f)
@@ -313,15 +336,41 @@ class FeatureExtractor():
 
         if self.pca is not None:
             ("Fitting SVD to post hashtag features...")
-            corpus = scipy.sparse.vstack([vec.transform(
-                data_train['post_tags_reblog'].map(utils.string_list2str)), 
-                vec.transform(data_train['post_tags_nonreblog'].map(
-                    utils.string_list2str))])
+            if self.post_ngrams:
+                corpus = scipy.sparse.vstack([vec.transform(
+                    data_train['post_tags_reblog'].map(utils.string_list2str)), 
+                    vec.transform(data_train['post_tags_nonreblog'].map(
+                        utils.string_list2str))])
+            elif self.post_tags:
+                corpus = scipy.sparse.vstack([vec.transform(
+                    data_train['post_tags_reblog'].map(utils.strlist2underscore)), 
+                    vec.transform(data_train['post_tags_nonreblog'].map(
+                        utils.strlist2underscore))])
             svd = TruncatedSVD(self.pca).fit(corpus)
             # Save PCA
             with open(f'/projects/tumblr_community_identity/tmp/post_tag_pca{self.pca}.pkl', 'wb') as f:
                 pickle.dump(svd, f)
             print("Wrote PCA")
+
+        elif self.lda is not None:
+            ("Fitting LDA to post hashtag features...")
+            if self.post_tags:
+                corpus = scipy.sparse.vstack([vec.transform(
+                    data_train['post_tags_reblog'].map(utils.strlist2underscore)), 
+                    vec.transform(data_train['post_tags_nonreblog'].map(
+                        utils.strlist2underscore))])
+                # OLD gensim way
+                #corpus_gensim = Sparse2Corpus(corpus)
+                #id2word = {wid: word for wid,word in enumerate(
+                #    vec.get_feature_names())}
+                #lda = LdaMulticore(corpus_gensim, num_topics=self.lda, 
+                #    id2word=id2word, workers=10)
+            lda = LatentDirichletAllocation(self.lda, n_jobs=15).fit(corpus) 
+            # Save LDA model
+            with open(f'/projects/tumblr_community_identity/tmp/post_tag_lda{self.lda}.pkl', 'wb') as f:
+                pickle.dump(lda, f)
+            print("Wrote LDA")
+            #lda.save(f'/projects/tumblr_community_identity/tmp/post_tag_lda{self.lda}.model')
 
         print("\tPost hashtag features...")
         for reblog_type in ['reblog', 'nonreblog']:
@@ -329,18 +378,29 @@ class FeatureExtractor():
                 fn = self.get_word_inds
                 params = None
                 self.build_vocab()
-            elif not self.post_ngrams:
-                fn = self.word_embeddings
-                params = None
-            else:
+            elif self.post_ngrams or self.post_tags:
                 fn = self.get_ngrams
                 if self.pca is not None:
                     params = [vec, svd]
+                elif self.lda is not None:
+                    params = [vec, lda]
                 else:
                     params = [vec]
-            feature_opts[reblog_type] = np.array([fn(
-                    utils.string_list2str(tags), *params) for tags in tqdm(
-                    data[f'post_tags_{reblog_type}'], ncols=70)])
+            else:
+                fn = self.word_embeddings
+                params = None
+            #feature_opts[reblog_type] = np.array([fn(
+            #        utils.string_list2str(tags), *params) for tags in tqdm(
+            #        data[f'post_tags_{reblog_type}'], ncols=70)])
+            # Use below and above when output is sparse, like with ngrams
+            #res = [fn(utils.strlist2underscore(tags), *params) for tags in tqdm(
+            #        data[f'post_tags_{reblog_type}'], ncols=70)]
+            #feature_opts[reblog_type] = np.array(res)
+            corpus = vec.transform([utils.strlist2underscore(tags) for tags in tqdm(
+                data[f'post_tags_{reblog_type}'])])
+            feature_opts[reblog_type] = lda.transform(corpus)
+            #res = lda[Sparse2Corpus(corpus.T)]
+            #feature_opts[reblog_type] = corpus2csc(res).T.toarray()
         res = rank_feature_transform(feature_opts['reblog'], 
             feature_opts['nonreblog'], data.label, combo=combo)
         if res.ndim == 3:
@@ -660,16 +720,16 @@ class FeatureExtractor():
                 return_arr = np.mean(embeddings, axis=0)
         return return_arr
 
-    def get_ngrams(self, text, vec, pca=None):
+    def get_ngrams(self, text, vec, decomp=None):
         """ Returns an ngram representation for a given text, which has
             space-separated tokens. 
             Args:
                 vec: feature vectorizer
-                pca: Trained dimensionality reduction transformer
+                decomp: Trained dimensionality reduction transformer (SVD, LDA)
         """
         res = vec.transform([text])
-        if pca:
-            res = pca.transform(res)
+        if decomp:
+            res = decomp.transform(res)
         return res
 
     def aligned_ngrams(self, follower_text, followee_text):
