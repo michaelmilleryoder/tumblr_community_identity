@@ -11,6 +11,7 @@ import pickle
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 
 
 class Dataset():
@@ -27,18 +28,26 @@ class Dataset():
         self.y_train = None
         self.y_dev = None
         self.y_test = None
+        self.index_train = None
+        self.index_dev = None
+        self.index_train = None
         self.organization = None
             # how the data is organized: {learning-to-rank, binary_classification}
         self.filter_settings = None
 
-    def set_folds(self, X_train, X_test, y_train, y_test, X_dev=None, y_dev=None):
-        """ Set training and testing folds """
-        self.X_train = X_train
-        self.X_dev = X_dev
-        self.X_test = X_test
-        self.y_train = y_train
-        self.y_dev = y_dev
-        self.y_test = y_test
+    def split(self, X, y, dev=False, test_size=0.2):
+        """ Split into train, dev, test folds and save to self.
+            X are extracted features (Numpy or Scipy sparse matrix in the 
+                same order/length as data)
+        """
+        (self.X_train, self.X_test, self.y_train, self.y_test, 
+            self.index_train, self.index_test) = train_test_split(
+            X, y, self.data.index, test_size=test_size, random_state=9)
+        if dev:
+            (self.X_train, self.X_dev, self.y_train, self.y_dev,
+                self.index_train, self.index_dev) = train_test_split(
+                self.X_train, self.y_train, self.index_train, 
+                test_size=len(self.y_test), random_state=9)
 
     def load(self, data_location, organization):
         """ Load data.
@@ -243,3 +252,9 @@ class Dataset():
             else:
                 pickle.dump((self.X_train, self.y_train,
                     self.X_test, self.y_test), f)
+        print(f"\tSaved folds to {outpath}")
+
+    def save(self, outpath):
+        """ Save entire Dataset structure out as a pickle """
+        with open(outpath, 'wb') as f:
+            pickle.dump(self.__dict__, f)

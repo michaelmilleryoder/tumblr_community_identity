@@ -179,7 +179,7 @@ def main():
     # Run model
     print("Running model...")
     data_outpath = f'../tmp/{exp_name}_data.pkl'
-    dataset.save_folds(data_outpath)
+    dataset.save(data_outpath)
     print(f"\tSaved dataset folds to {data_outpath}")
     experiment = Experiment(extractor, dataset, args.classifier_type, args.use_cuda,
          args.epochs, sfs_k=args.forward_feature_selection_k)

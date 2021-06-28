@@ -26,11 +26,11 @@ import scipy.sparse
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from gensim.models.ldamodel import LdaModel
-from gensim.models.ldamulticore import LdaMulticore
-from gensim.matutils import Sparse2Corpus
-from gensim.matutils import corpus2dense
-from gensim.matutils import corpus2csc
+#from gensim.models.ldamodel import LdaModel
+#from gensim.models.ldamulticore import LdaMulticore
+#from gensim.matutils import Sparse2Corpus
+#from gensim.matutils import corpus2dense
+#from gensim.matutils import corpus2csc
 
 import utils
 
@@ -47,7 +47,10 @@ def rank_feature_transform(reblog_feats_list, nonreblog_feats_list, labels,
         reblog_feats_list, nonreblog_feats_list, labels):
         if label == 1:
             if combo == 'subtract':
-                comparison_feats.append(reblog_feats - nonreblog_feats)
+                res = reblog_feats - nonreblog_feats
+                if not isinstance(res, np.float64) and 255 in res:
+                    pdb.set_trace()
+                comparison_feats.append(res)
             elif combo == 'concat':
                 comparison_feats.append(np.hstack([
                     reblog_feats, nonreblog_feats]))
@@ -176,49 +179,39 @@ class FeatureExtractor():
             y = data['reblog'].values
 
         # Split into train and test sets
-        X_train, X_test, y_train, y_test = train_test_split(
-            features, y, test_size=.2, random_state=9)
-            #features, y, test_size=.1, random_state=9)
-        if dev:
-            X_train, X_dev, y_train, y_dev = train_test_split(
-                X_train, y_train, test_size=len(y_test), random_state=9)
-            dataset.set_folds(X_train, X_test, y_train, y_test,
-                X_dev=X_dev, y_dev=y_dev)
+        dataset.split(features, y, dev=True, test_size=0.2)
         if run_pkg == 'pytorch':
             dataset.scale_nontext_features(self.nontext_inds)
 
         else: # sklearn
-            if isinstance(X_train, scipy.sparse.csr.csr_matrix):
+            if isinstance(dataset.X_train, scipy.sparse.csr.csr_matrix):
                 scaler = StandardScaler(with_mean=False)
             else:
                 scaler = StandardScaler(with_mean=True)
-            X_train = scaler.fit_transform(X_train)
-            X_test = scaler.transform(X_test)
+            dataset.X_train = scaler.fit_transform(dataset.X_train)
+            dataset.X_test = scaler.transform(dataset.X_test)
             if dev:
-                X_dev = scaler.transform(X_dev)
+                dataset.X_dev = scaler.transform(dataset.X_dev)
 
             # Feature selection (normal, based on ANOVA F-measure)
-            if self.select_k > 0 and self.select_k < X_train.shape[1]:
+            if self.select_k > 0 and self.select_k < dataset.X_train.shape[1]:
                 print("\tRunning feature extraction...")
-                selector = SelectKBest(f_classif, k=self.select_k).fit(X_train, y_train)
+                selector = SelectKBest(f_classif, k=self.select_k).fit(
+                    dataset.X_train, dataset.y_train)
                 # Save selected feature indices
                 np.savetxt('/projects/tumblr_community_identity/tmp/500selected_feats.txt', 
                     selector.get_support())
-                X_train = selector.transform(X_train)
-                X_dev = selector.transform(X_dev)
-                X_test = selector.transform(X_test)
+                dataset.X_train = selector.transform(dataset.X_train)
+                dataset.X_dev = selector.transform(dataset.X_dev)
+                dataset.X_test = selector.transform(dataset.X_test)
 
-            if dev:
-                dataset.set_folds(X_train, X_test, y_train, y_test,
-                    X_dev=X_dev, y_dev=y_dev)
-            else:
-                dataset.set_folds(X_train, X_test, y_train, y_test)
         print("\tTotal dataset shape (#instances, #features): "
-            f"{X_train.shape[0] + X_test.shape[0], X_train.shape[1]}")
-        print(f"\tTraining set shape: {X_train.shape}")
+            f"({dataset.X_train.shape[0] + dataset.X_test.shape[0]}, "
+            f"{dataset.X_train.shape[1]})")
+        print(f"\tTraining set shape: {dataset.X_train.shape}")
         if dev:
-            print(f"\tDev set shape: {X_dev.shape}")
-        print(f"\tTest set shape: {X_test.shape}")
+            print(f"\tDev set shape: {dataset.X_dev.shape}")
+        print(f"\tTest set shape: {dataset.X_test.shape}")
         return dataset
 
     def extract_post_features(self, data, organization):
@@ -246,8 +239,8 @@ class FeatureExtractor():
                     data, combo)
 
                 # Post type
-                #feature_parts['post_type'] = self.extract_post_type_features(
-                #    data, combo)
+                feature_parts['post_type'] = self.extract_post_type_features(
+                    data, combo)
 
             if self.post_ngrams and not self.pca and not self.lda:
                 feature_parts['post_tag_emb'] = scipy.sparse.vstack(feature_parts[
@@ -300,7 +293,7 @@ class FeatureExtractor():
         """
         feature_opts = {} # reblog and nonreblog
         if self.post_ngrams: # Initialize vectorizers
-            data_train, data_test = train_test_split(data, test_size=.1, 
+            data_train, data_test = train_test_split(data, test_size=.2, 
                 random_state=9)
             corpus = data_train['post_tags_nonreblog'].dropna().tolist() + data_train[
                 'post_tags_reblog'].dropna().tolist()
@@ -411,8 +404,8 @@ class FeatureExtractor():
         """ Extract post note features (likes, comments) """
         feature_opts = {} # reblog and nonreblog
         for reblog_type in ['reblog', 'nonreblog']:
-            feature_opts[reblog_type] = data[
-                f'post_note_count_{reblog_type}'].fillna(0).values
+            feature_opts[reblog_type] = np.nan_to_num(np.log(data[
+                f'post_note_count_{reblog_type}'].replace(0, np.nan).values))
         feats = rank_feature_transform(feature_opts['reblog'], 
             feature_opts['nonreblog'], 
             data.label, combo=combo)
@@ -425,11 +418,12 @@ class FeatureExtractor():
         feature_opts = {} # reblog and nonreblog
         for reblog_type in ['reblog', 'nonreblog']:
             feature_opts[reblog_type] = pd.get_dummies(
-                data[f'post_type_{reblog_type}']).values
+                data[f'post_type_{reblog_type}']).values.astype(int)
             # order is answer, audio, chat, link, photo, quote, text, video
-        return rank_feature_transform(feature_opts['reblog'], 
+        transformed = rank_feature_transform(feature_opts['reblog'], 
             feature_opts['nonreblog'], 
             data.label, combo=combo)
+        return transformed
 
     def text_embeddings_ltr(self, data):
         """ Extract embedding from a text blog description,
